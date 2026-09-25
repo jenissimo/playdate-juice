@@ -1,7 +1,7 @@
-name=Transitions Demo
+name=Juice Zoo
 author=jenissimo
-description=Procedural scene transition showcase
-bundleID=com.jenissimo.transitions
-version=1.0.0
-buildNumber=1
+description=Every playdate-juice module in one place: transitions, backgrounds, tween, shake, particles, sfxkit, jukebox and chiptune
+bundleID=com.jenissimo.juice.zoo
+version=2.0.0
+buildNumber=2
 imagePath=

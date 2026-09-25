@@ -1,269 +1,717 @@
+-- Juice Zoo: every module of playdate-juice, one exhibit each.
+--
+-- The hub is itself built from the library: an animated background behind
+-- the menu, a spring on the selection bar, a transition on every hop, the
+-- menu theme and the blips from chiptune. Built by tools/build_demo.py.
 import "CoreLibs/graphics"
 import "transitions"
 import "sfxkit"          -- before "sounds": that module is written on top of it
 import "sounds"
 import "backgrounds"
+import "tween"
+import "shake"
+import "particles"
+import "jukebox"
+import "chiptune"
 
 local gfx <const> = playdate.graphics
-local snd <const> = playdate.sound
 local W <const> = 400
 local H <const> = 240
-local sin <const> = math.sin
-local cos <const> = math.cos
 local floor <const> = math.floor
 local max <const> = math.max
 local min <const> = math.min
+local sin <const> = math.sin
+local abs <const> = math.abs
 
 playdate.display.setRefreshRate(30)
 
 local fontBold = gfx.font.new("fonts/Roobert-10-Bold")
 local fontTitle = gfx.font.new("fonts/Roobert-11-Medium")
-assert(fontBold)
-assert(fontTitle)
--- All sound allocation happens in one place, before the first update: the menu
--- tick is just another recipe rather than a synth this file owns.
+local fontMono = gfx.font.new("fonts/Roobert-11-Mono-Condensed")
+assert(fontBold and fontTitle and fontMono)
+
+-- ─── audio ─────────────────────────────────────────────────────────────────
+
+-- All sound allocation happens here, before the first update.
 TransitionSounds.load()
 SfxKit.define("tick", { prio = 3, notes = {
     { group = "sq", hz = 900, vol = 0.15, len = 0.03, adsr = { 0.001, 0.03, 0, 0.01 } },
 } })
 
-local function sfxTick() SfxKit.emit("tick") end
-local tick = 0
-local scene = "menu"
-local sel = 1
-local selPunch = 0
-local scrollOff = 0
-local holdTimer = 0
-local transSpeed = 24
-local demoBgIdx = 1
-local autoPlay = false
-local autoPause = 0
+local SONGS = {
+    { id = "cloud_garden",  title = "Cloud Garden",  style = "Main menu - airy, 90 BPM" },
+    { id = "tidal_twang",   title = "Tidal Twang",   style = "Surf rock - tremolo, 179 BPM" },
+    { id = "jungle_pulse",  title = "Jungle Pulse",  style = "Drum & bass - 170 BPM" },
+    { id = "crimson_clash", title = "Crimson Clash", style = "JRPG battle - 163 BPM" },
+    { id = "willow_lane",   title = "Willow Lane",   style = "Village waltz - 3/4" },
+    { id = "hollow_deep",   title = "Hollow Deep",   style = "Dungeon - ambient" },
+    { id = "victory",       title = "Victory",       style = "Fanfare - ends" },
+    { id = "fade_out",      title = "Fade Out",      style = "Game over - ends" },
+}
+local songPaths = {}
+for _, s in ipairs(SONGS) do songPaths[s.id] = "music/" .. s.id .. ".gbm" end
+local chipOk, chipErr = Chiptune.load({ songs = songPaths, sfx = "music/sfx.gbm",
+                                        duck = { amount = 6, speed = 2 }, volume = 0.8 })
+if not chipOk then print(chipErr) end
 
-local TRANS = Transitions.names
-local PX, PY, PW, PH = 55, 14, 290, 199
-local LIST_Y = PY + 36
-local ITEM_H = 14
-local MAX_VIS = 11
-local function drawOutlined(text, x, y)
+-- Pre-rendered by build_demo.py (tools/chiptune.py render): the same music
+-- as files, for the Jukebox exhibit and for games without the C extension.
+Jukebox.load({ tracks = { surf = "jukebox/tidal_twang", waltz = "jukebox/willow_lane" },
+               volumes = { surf = 0.7, waltz = 0.7 } })
+
+-- A named chiptune effect, or the synth tick when the extension is missing.
+local function blip(name)
+    if not (chipOk and Chiptune.sfx(name)) then SfxKit.emit("tick") end
+end
+
+function playdate.gameWillPause() Chiptune.pause(); Jukebox.pause() end
+function playdate.gameWillResume() Chiptune.resume(); Jukebox.resume() end
+
+-- ─── drawing helpers ───────────────────────────────────────────────────────
+
+local tick = 0
+
+local function outlined(text, x, y)
     gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
     for dx = -1, 1 do
         for dy = -1, 1 do
-            if dx ~= 0 or dy ~= 0 then
-                gfx.drawText(text, x + dx, y + dy)
-            end
+            if dx ~= 0 or dy ~= 0 then gfx.drawText(text, x + dx, y + dy) end
         end
     end
     gfx.setImageDrawMode(gfx.kDrawModeCopy)
     gfx.drawText(text, x, y)
 end
-local function drawMenuBg()
-    gfx.clear(gfx.kColorWhite)
-    gfx.setColor(gfx.kColorBlack)
-    local sp = 22
-    for x = 0, W, sp do
-        for y = 0, H, sp do
-            local v = sin(x * 0.016 + tick * 0.045) + cos(y * 0.02 + tick * 0.035)
-            local r = floor(1.5 + v * 2)
-            if r > 0 then gfx.fillCircleAtPoint(x, y, r) end
-        end
-    end
-end
 
-local function drawMenu()
-    drawMenuBg()
-
+local function panel(x, y, w, h)
     gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(PX, PY, PW, PH)
+    gfx.fillRect(x, y, w, h)
     gfx.setColor(gfx.kColorBlack)
     gfx.setLineWidth(2)
-    gfx.drawRect(PX, PY, PW, PH)
-    gfx.drawRect(PX + 3, PY + 3, PW - 6, PH - 6)
+    gfx.drawRect(x, y, w, h)
+    gfx.drawRect(x + 3, y + 3, w - 6, h - 6)
     gfx.setLineWidth(1)
-
-    gfx.setFont(fontTitle)
-    local title = "TRANSITIONS"
-    local tw, _ = gfx.getTextSize(title)
-    gfx.drawText(title, PX + (PW - tw) / 2, PY + 8)
-    gfx.drawLine(PX + 12, PY + 28, PX + PW - 12, PY + 28)
-
-    gfx.setClipRect(PX + 4, LIST_Y - 2, PW - 8, MAX_VIS * ITEM_H + 4)
-    gfx.setFont(fontBold)
-    selPunch = selPunch * 0.82
-    if sel <= scrollOff then scrollOff = sel - 1 end
-    if sel > scrollOff + MAX_VIS then scrollOff = sel - MAX_VIS end
-
-    for idx = 1, MAX_VIS do
-        local i = idx + scrollOff
-        if i > #TRANS then break end
-        local name = TRANS[i]
-        local iy = LIST_Y + (idx - 1) * ITEM_H
-        if i == sel then
-            local extra = floor(selPunch * 6)
-            gfx.setColor(gfx.kColorBlack)
-            gfx.fillRect(PX + 6 - extra, iy - 1, PW - 12 + extra * 2, ITEM_H)
-            gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-            local arrow = floor(sin(tick * 0.15) * 2)
-            gfx.drawText(">", PX + 12 + arrow, iy)
-            gfx.drawText(name, PX + 26, iy)
-            gfx.setImageDrawMode(gfx.kDrawModeCopy)
-        else
-            gfx.drawText("  " .. name, PX + 12, iy)
-        end
-    end
-    gfx.clearClipRect()
-
-    gfx.setColor(gfx.kColorBlack)
-    local mx = floor(PX + PW / 2)
-    if scrollOff > 0 then
-        local ay = LIST_Y - 3
-        gfx.fillRect(mx - 1, ay - 3, 2, 1)
-        gfx.fillRect(mx - 2, ay - 2, 4, 1)
-        gfx.fillRect(mx - 3, ay - 1, 6, 1)
-        gfx.fillRect(mx - 4, ay, 8, 1)
-    end
-    if scrollOff + MAX_VIS < #TRANS then
-        local by = LIST_Y + MAX_VIS * ITEM_H
-        gfx.fillRect(mx - 4, by, 8, 1)
-        gfx.fillRect(mx - 3, by + 1, 6, 1)
-        gfx.fillRect(mx - 2, by + 2, 4, 1)
-        gfx.fillRect(mx - 1, by + 3, 2, 1)
-    end
-
-    gfx.setFont(fontBold)
-    drawOutlined(Transitions.descriptions[TRANS[sel]] or "", PX + 8, PY + PH + 5)
-    local spd = "Speed:" .. tostring(floor(transSpeed))
-    local sw2, _ = gfx.getTextSize(spd)
-    drawOutlined(spd, PX + PW - sw2 - 8, PY + PH + 5)
 end
-local function drawDemo()
-    Backgrounds.draw(demoBgIdx)
-    gfx.setColor(gfx.kColorBlack)
 
-    local cw, ch = 210, 54
-    local cx = (W - cw) / 2
-    local cy = (H - ch) / 2 - 10
+local function header(text, sub)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.fillRect(0, 0, W, 22)
+    gfx.setFont(fontTitle)
+    gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+    gfx.drawText(text, 8, 3)
+    if sub then
+        gfx.setFont(fontBold)
+        local w = gfx.getTextSize(sub)
+        gfx.drawText(sub, W - w - 8, 5)
+    end
+    gfx.setImageDrawMode(gfx.kDrawModeCopy)
+end
+
+local function footer(text)
     gfx.setColor(gfx.kColorWhite)
-    gfx.fillRoundRect(cx, cy, cw, ch, 4)
+    gfx.fillRect(0, H - 18, W, 18)
     gfx.setColor(gfx.kColorBlack)
-    gfx.setLineWidth(2)
-    gfx.drawRoundRect(cx, cy, cw, ch, 4)
-    gfx.setLineWidth(1)
-
-    gfx.setFont(fontTitle)
-    local name = TRANS[sel]
-    local nw, _ = gfx.getTextSize(name)
-    gfx.drawText(name, cx + (cw - nw) / 2, cy + 8)
-
+    gfx.drawLine(0, H - 18, W, H - 18)
     gfx.setFont(fontBold)
-    local bgn = "BG: " .. Backgrounds.getName(demoBgIdx)
-    local bw2, _ = gfx.getTextSize(bgn)
-    gfx.drawText(bgn, cx + (cw - bw2) / 2, cy + 32)
+    gfx.drawText(text, 8, H - 15)
+end
 
+-- A selectable list with a sliding bar; `spring` (frames) smooths the bar's y.
+local function list(items, sel, x, y, w, rowH, visible, spring, label)
+    local first = max(1, min(sel - floor(visible / 2), #items - visible + 1))
+    local target = y + (sel - first) * rowH
+    local by = floor(spring:update(target) + 0.5)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.fillRect(x, by - 1, w, rowH)
     gfx.setFont(fontBold)
-    drawOutlined("[A] Next  [B] Back  D-pad: BG", 12, H - 15)
-end
-local function drawScene()
-    if scene == "menu" then drawMenu() else drawDemo() end
-end
-local function moveSelection(dir)
-    sel += dir
-    if sel < 1 then sel = #TRANS end
-    if sel > #TRANS then sel = 1 end
-    selPunch = 1
-    sfxTick()
+    for i = first, min(#items, first + visible - 1) do
+        local iy = y + (i - first) * rowH
+        local text = label and label(items[i], i) or tostring(items[i])
+        if i == sel then gfx.setImageDrawMode(gfx.kDrawModeFillWhite) end
+        gfx.drawText(text, x + 6, iy)
+        gfx.setImageDrawMode(gfx.kDrawModeCopy)
+    end
+    return first
 end
 
-local function handleInput()
-    if scene == "menu" then
-        local moved = false
-        if playdate.buttonJustPressed(playdate.kButtonUp) then moveSelection(-1); moved = true end
-        if playdate.buttonJustPressed(playdate.kButtonDown) then moveSelection(1); moved = true end
-
-        if not moved then
-            if playdate.buttonIsPressed(playdate.kButtonUp) or playdate.buttonIsPressed(playdate.kButtonDown) then
-                holdTimer += 1
-                if holdTimer > 14 and holdTimer % 3 == 0 then
-                    local dir = playdate.buttonIsPressed(playdate.kButtonUp) and -1 or 1
-                    moveSelection(dir)
-                end
-            else
-                holdTimer = 0
-            end
-        else
-            holdTimer = 0
+-- Four channel meters: the chiptune APU as it sounds right now.
+local meterPeak = { 0, 0, 0, 0 }
+local function meters(x, y, h, cursor, muted)
+    local lv = { Chiptune.levels() }
+    local names = { "PU1", "PU2", "WAV", "NOI" }
+    gfx.setFont(fontBold)
+    for c = 1, 4 do
+        local v = lv[c] or 0
+        meterPeak[c] = max(v, meterPeak[c] - 0.5)
+        local bx = x + (c - 1) * 30
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawRect(bx, y, 22, h)
+        local fill = floor((h - 4) * v / 15)
+        gfx.fillRect(bx + 2, y + h - 2 - fill, 18, fill)
+        local py = y + h - 2 - floor((h - 4) * meterPeak[c] / 15)
+        gfx.drawLine(bx + 2, py, bx + 19, py)
+        if muted and muted[c] then
+            gfx.drawLine(bx, y, bx + 22, y + h)
+            gfx.drawLine(bx + 22, y, bx, y + h)
         end
-
-        if playdate.buttonJustPressed(playdate.kButtonA) then
-            demoBgIdx = (demoBgIdx % Backgrounds.count) + 1
-            Transitions.start(TRANS[sel], "fwd", floor(transSpeed))
-            scene = "demo"
-        end
-    else
-        if playdate.buttonJustPressed(playdate.kButtonB) then
-            Transitions.start(TRANS[sel], "back", floor(transSpeed))
-            scene = "menu"
-        end
-        if playdate.buttonJustPressed(playdate.kButtonA) then
-            demoBgIdx = (demoBgIdx % Backgrounds.count) + 1
-            Transitions.start(TRANS[sel], "fwd", floor(transSpeed))
-        end
-        if playdate.buttonJustPressed(playdate.kButtonLeft) then
-            demoBgIdx = ((demoBgIdx - 2) % Backgrounds.count) + 1
-        end
-        if playdate.buttonJustPressed(playdate.kButtonRight) then
-            demoBgIdx = (demoBgIdx % Backgrounds.count) + 1
-        end
+        if cursor == c then gfx.fillRect(bx, y + h + 16, 22, 2) end
+        gfx.drawText(names[c], bx, y + h + 3)
     end
 end
-local function autoStep()
+
+-- ─── scenes ────────────────────────────────────────────────────────────────
+
+local scenes = {}
+local current = "hub"
+
+local function go(id, effect, dir)
     if Transitions.active then return end
-    if autoPause > 0 then
-        autoPause -= 1
-        return
-    end
-    if scene == "menu" then
-        demoBgIdx = (demoBgIdx % Backgrounds.count) + 1
-        Transitions.start(TRANS[sel], "fwd", 20)
-        scene = "demo"
-        autoPause = 25
-    else
-        Transitions.start(TRANS[sel], "back", 20)
-        scene = "menu"
-        sel += 1
-        if sel > #TRANS then
-            sel = 1
-            autoPlay = false
-        end
-        selPunch = 1
-        autoPause = 15
-    end
+    local leaving = scenes[current]
+    if leaving.leave then leaving.leave() end
+    -- The snapshot is taken now: the screen still shows the outgoing scene.
+    TransitionSounds.enabled = false
+    Transitions.start(effect or "Fade", dir or "fwd", 18)
+    current = id
+    if scenes[id].enter then scenes[id].enter() end
 end
+
+local pressed = playdate.buttonJustPressed
+local held = playdate.buttonIsPressed
+local UP, DOWN, LEFT, RIGHT = playdate.kButtonUp, playdate.kButtonDown, playdate.kButtonLeft, playdate.kButtonRight
+local A, B = playdate.kButtonA, playdate.kButtonB
+
+-- Up/down with auto-repeat, wrapping.
+local repeatTimer = 0
+local function navigate(sel, n)
+    local d = 0
+    if pressed(UP) then d = -1 elseif pressed(DOWN) then d = 1 end
+    if d == 0 and (held(UP) or held(DOWN)) then
+        repeatTimer = repeatTimer + 1
+        if repeatTimer > 10 and repeatTimer % 3 == 0 then d = held(UP) and -1 or 1 end
+    elseif d == 0 then
+        repeatTimer = 0
+    end
+    if d ~= 0 then
+        blip("cursor")
+        return (sel - 1 + d) % n + 1
+    end
+    return sel
+end
+
+-- ─── the hub ───────────────────────────────────────────────────────────────
+
+local EXHIBITS = {
+    { id = "transitions", name = "Transitions",       blurb = "23 scene transitions and a hop plan", fx = "Circle" },
+    { id = "backgrounds", name = "Backgrounds",       blurb = "17 looping procedural backgrounds",   fx = "Dissolve" },
+    { id = "tween",       name = "Tween",             blurb = "31 easings, springs, sequences",      fx = "Slide" },
+    { id = "impact",      name = "Shake & Particles", blurb = "Trauma shake, pooled 1-bit particles", fx = "Shatter" },
+    { id = "sfxkit",      name = "SfxKit",            blurb = "Synth sound effects as data",         fx = "Blinds" },
+    { id = "music",       name = "Chiptune: Music",   blurb = "8 songs on a Game Boy tracker driver", fx = "Scanline" },
+    { id = "sfx",         name = "Chiptune: SFX",     blurb = "38 effects that duck the music",      fx = "Pixel Shift" },
+    { id = "jukebox",     name = "Jukebox",           blurb = "Streamed files, crossfades, ducking", fx = "Fade" },
+}
+local hubSel = 1
+local hubSpring = Tween.newSpring(0, 3)
+local hubBg = Backgrounds.indexOf("Plasma") or 1
+
+scenes.hub = {
+    enter = function() Chiptune.play("cloud_garden") end,
+    input = function()
+        hubSel = navigate(hubSel, #EXHIBITS)
+        if pressed(A) then
+            blip("select")
+            local e = EXHIBITS[hubSel]
+            go(e.id, e.fx, "fwd")
+        end
+    end,
+    update = function() Backgrounds.update(hubBg) end,
+    draw = function()
+        Backgrounds.draw(hubBg)
+        local px, py, pw, ph = 70, 18, 260, 196
+        panel(px, py, pw, ph)
+        gfx.setFont(fontTitle)
+        local t = "JUICE ZOO"
+        local tw = gfx.getTextSize(t)
+        gfx.drawText(t, px + (pw - tw) / 2, py + 9)
+        gfx.drawLine(px + 12, py + 30, px + pw - 12, py + 30)
+        list(EXHIBITS, hubSel, px + 10, py + 38, pw - 20, 17, 8, hubSpring, function(e) return e.name end)
+        gfx.setFont(fontBold)
+        outlined(EXHIBITS[hubSel].blurb, 12, H - 18)
+        if chipOk and Chiptune.current() then
+            local s = "~ " .. Chiptune.current():gsub("_", " ")
+            local sw = gfx.getTextSize(s)
+            outlined(s, W - sw - 10, 4)
+        end
+    end,
+}
+
+-- ─── transitions ───────────────────────────────────────────────────────────
+
+do
+    local TRANS = Transitions.names
+    local sel, speed, mode, bg = 1, 24, "list", 1
+    local spring = Tween.newSpring(0, 3)
+    local auto, autoPause = false, 0
+
+    local function play(dir)
+        TransitionSounds.enabled = true
+        Transitions.start(TRANS[sel], dir, floor(speed))
+    end
+
+    scenes.transitions = {
+        enter = function() mode = "list" end,
+        input = function()
+            if auto then
+                if autoPause > 0 then autoPause = autoPause - 1; return end
+                if mode == "list" then
+                    bg = bg % Backgrounds.count + 1
+                    mode = "card"; play("fwd"); autoPause = 25
+                else
+                    mode = "list"; play("back"); autoPause = 15
+                    sel = sel + 1
+                    if sel > #TRANS then sel, auto = 1, false end
+                end
+                return
+            end
+            local cc = playdate.getCrankChange()
+            if abs(cc) > 1 then speed = max(8, min(60, speed + cc * 0.12)) end
+            if mode == "list" then
+                sel = navigate(sel, #TRANS)
+                if pressed(A) then bg = bg % Backgrounds.count + 1; mode = "card"; play("fwd") end
+                if pressed(B) then go("hub", "Circle", "back") end
+            else
+                if pressed(A) then bg = bg % Backgrounds.count + 1; play("fwd") end
+                if pressed(B) then mode = "list"; play("back") end
+                if pressed(LEFT) then bg = (bg - 2) % Backgrounds.count + 1 end
+                if pressed(RIGHT) then bg = bg % Backgrounds.count + 1 end
+            end
+        end,
+        update = function() if mode == "card" then Backgrounds.update(bg) end end,
+        draw = function()
+            if mode == "list" then
+                gfx.clear(gfx.kColorWhite)
+                header("Transitions", "speed " .. floor(speed) .. "f  (crank)")
+                list(TRANS, sel, 10, 30, 180, 15, 12, spring)
+                gfx.setFont(fontBold)
+                gfx.drawTextInRect(Transitions.descriptions[TRANS[sel]] or "", 205, 34, 185, 150)
+                footer("A play   B back   crank: speed   menu: auto showcase")
+            else
+                Backgrounds.draw(bg)
+                local cw, ch = 220, 54
+                local cx, cy = (W - cw) / 2, (H - ch) / 2 - 10
+                gfx.setColor(gfx.kColorWhite)
+                gfx.fillRoundRect(cx, cy, cw, ch, 4)
+                gfx.setColor(gfx.kColorBlack)
+                gfx.setLineWidth(2)
+                gfx.drawRoundRect(cx, cy, cw, ch, 4)
+                gfx.setLineWidth(1)
+                gfx.setFont(fontTitle)
+                local n = TRANS[sel]
+                local nw = gfx.getTextSize(n)
+                gfx.drawText(n, cx + (cw - nw) / 2, cy + 8)
+                gfx.setFont(fontBold)
+                local b = "BG: " .. Backgrounds.getName(bg)
+                local bw = gfx.getTextSize(b)
+                gfx.drawText(b, cx + (cw - bw) / 2, cy + 32)
+                outlined("A next   B list   left/right: background", 12, H - 16)
+            end
+        end,
+    }
+
+    playdate.getSystemMenu():addMenuItem("Auto Showcase", function()
+        if current ~= "transitions" then go("transitions", "Circle", "fwd") end
+        auto, autoPause, mode = true, 10, "list"
+    end)
+end
+
+-- ─── backgrounds ───────────────────────────────────────────────────────────
+
+do
+    local bg = 1
+    local seed = 1
+    scenes.backgrounds = {
+        input = function()
+            if pressed(RIGHT) or pressed(DOWN) then bg = bg % Backgrounds.count + 1; blip("cursor") end
+            if pressed(LEFT) or pressed(UP) then bg = (bg - 2) % Backgrounds.count + 1; blip("cursor") end
+            if pressed(A) then seed = seed + 1; Backgrounds.reset(bg, seed * 7919); blip("select") end
+            if pressed(B) then go("hub", "Dissolve", "back") end
+        end,
+        update = function() Backgrounds.update(bg) end,
+        draw = function()
+            Backgrounds.draw(bg)
+            gfx.setFont(fontTitle)
+            outlined(Backgrounds.getName(bg), 10, 8)
+            gfx.setFont(fontBold)
+            outlined(bg .. " / " .. Backgrounds.count, 10, 28)
+            outlined("left/right: background   A reseed   B back", 10, H - 16)
+        end,
+    }
+end
+
+-- ─── tween ─────────────────────────────────────────────────────────────────
+
+do
+    local names = Tween.easeNames
+    local sel = 1
+    local spring = Tween.newSpring(0, 3)
+    local ball = { t = 0 }
+    local anim = nil
+    local wait = 0
+    local follow = Tween.newSpring(200, 9)
+    local target = 200
+
+    -- A finished tween's node goes back to the pool, so the handle is only
+    -- held while it runs: onComplete drops it.
+    local function replay()
+        if anim then anim:cancel() end
+        ball.t = 0
+        anim = Tween.field(ball, 40, "t", 1, names[sel]):onComplete(function() anim = nil end)
+        wait = 70
+    end
+
+    scenes.tween = {
+        enter = function() replay() end,
+        leave = function() if anim then anim:cancel(); anim = nil end end,
+        input = function()
+            local s = navigate(sel, #names)
+            if s ~= sel then sel = s; replay() end
+            if pressed(A) then replay() end
+            if pressed(B) then go("hub", "Slide", "back") end
+            local cc = playdate.getCrankChange()
+            target = max(210, min(385, target + cc * 0.6))
+            if pressed(LEFT) then target = 215 end
+            if pressed(RIGHT) then target = 380 end
+        end,
+        update = function()
+            wait = wait - 1
+            if wait <= 0 then replay() end
+            follow:update(target)
+        end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            header("Tween", #names .. " easings")
+            list(names, sel, 10, 30, 150, 15, 12, spring)
+            -- The curve, sampled; the ball rides it.
+            local gx, gy, gw, gh = 205, 44, 180, 100
+            gfx.setColor(gfx.kColorBlack)
+            gfx.setDitherPattern(0.5, gfx.image.kDitherTypeBayer4x4)
+            gfx.drawRect(gx, gy, gw, gh)
+            gfx.setColor(gfx.kColorBlack)
+            local f = Tween.ease[names[sel]]
+            local px, py = gx, gy + gh
+            for i = 1, 45 do
+                local t = i / 45
+                local x, y = gx + t * gw, gy + gh - f(t) * gh
+                gfx.drawLine(px, py, x, y)
+                px, py = x, y
+            end
+            local bx, by = gx + ball.t * gw, gy + gh - f(ball.t) * gh
+            gfx.fillCircleAtPoint(bx, by, 4)
+            gfx.fillRect(gx - 12, by - 1, 6, 3)
+            -- The spring chasing a target the crank moves: no fixed end to ease to.
+            gfx.setFont(fontBold)
+            gfx.drawText("Spring (crank, left/right)", 205, 160)
+            gfx.drawLine(205, 196, 390, 196)
+            gfx.drawLine(target, 190, target, 202)
+            gfx.fillCircleAtPoint(floor(follow.value + 0.5), 196, 6)
+            footer("up/down easing   A replay   B back")
+        end,
+    }
+end
+
+-- ─── shake & particles ─────────────────────────────────────────────────────
+
+do
+    local shaker = Shake.new("hit")
+    local quake = Shake.new("quake")
+    local ps = Particles.new(260, { seed = 7 })
+    local crankSparks = 0
+    Shake.load(); Particles.load()
+
+    local function sound(chipName)
+        if not (chipOk and Chiptune.sfx(chipName)) then SfxKit.emit("t:Shatter", "fwd") end
+    end
+
+    scenes.impact = {
+        input = function()
+            if pressed(A) then
+                shaker:add(0.5)
+                ps:emit(80 + math.random(240), 70 + math.random(90), "burst")
+                sound("hit")
+            end
+            if pressed(UP) then
+                quake:add(1.0)
+                for _ = 1, 3 do ps:emit(120 + math.random(160), 150, "puff") end
+                ps:emit(200, 190, "spark", 30)
+                sound("explosion")
+            end
+            if pressed(DOWN) then
+                ps:emit(200, 200, "spark")
+                sound("shoot")
+            end
+            crankSparks = crankSparks + abs(playdate.getCrankChange()) / 40
+            while crankSparks >= 1 do
+                crankSparks = crankSparks - 1
+                ps:emit(60 + (tick * 7) % 280, 200, "spark", 2)
+            end
+            if pressed(B) then go("hub", "Shatter", "back") end
+        end,
+        update = function()
+            shaker:update(); quake:update(); ps:update()
+        end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            Shake.apply(shaker); Shake.apply(quake)
+            gfx.setColor(gfx.kColorBlack)
+            gfx.fillRect(-20, 200, W + 40, 60)
+            for i = 0, 5 do
+                local x = 40 + i * 62
+                gfx.setDitherPattern(0.25 * (i % 3 + 1), gfx.image.kDitherTypeBayer8x8)
+                gfx.fillRect(x, 150 - (i % 3) * 20, 40, 50 + (i % 3) * 20)
+                gfx.setColor(gfx.kColorBlack)
+                gfx.drawRect(x, 150 - (i % 3) * 20, 40, 50 + (i % 3) * 20)
+            end
+            ps:draw()
+            Shake.pop(); Shake.pop()
+            header("Shake & Particles", "live " .. ps.count .. "  dropped " .. ps.dropped)
+            gfx.setFont(fontBold)
+            gfx.drawText("trauma", 10, 30)
+            gfx.drawRect(60, 32, 100, 8)
+            gfx.fillRect(60, 32, floor(100 * max(shaker.trauma, quake.trauma)), 8)
+            footer("A hit   up quake   down sparks   crank: fountain   B back")
+        end,
+    }
+end
+
+-- ─── sfxkit ────────────────────────────────────────────────────────────────
+
+do
+    local names = {}
+    for n in pairs(TransitionSounds.FX) do names[#names + 1] = n end
+    table.sort(names)
+    local sel = 1
+    local spring = Tween.newSpring(0, 3)
+    local last = ""
+    scenes.sfxkit = {
+        enter = function() Chiptune.stop() end,
+        leave = function() end,
+        input = function()
+            sel = navigate(sel, #names)
+            if pressed(A) or pressed(RIGHT) then
+                local dir = pressed(RIGHT) and "back" or "fwd"
+                last = SfxKit.emit("t:" .. names[sel], dir) and (names[sel] .. " (" .. dir .. ")") or "dropped: budget"
+            end
+            if pressed(B) then go("hub", "Blinds", "back") end
+        end,
+        update = function() end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            header("SfxKit", #names .. " recipes")
+            list(names, sel, 10, 30, 170, 15, 12, spring)
+            gfx.setFont(fontBold)
+            local rows = TransitionSounds.FX[names[sel]]
+            gfx.drawText("notes in this recipe:", 200, 34)
+            for i, r in ipairs(rows) do
+                gfx.drawText(string.format("%-5s %4d Hz  %.2fs", r[1], r[7], r[9]), 200, 36 + i * 16)
+            end
+            gfx.drawTextInRect("Voices come from a pool allocated at load time, by audio time and by frame: " ..
+                               "two sounds in one frame never delete each other's notes.", 200, 120, 190, 70)
+            gfx.drawText(last, 200, 196)
+            footer("A play forward   right: backward   B back")
+        end,
+    }
+end
+
+-- ─── chiptune: music ───────────────────────────────────────────────────────
+
+do
+    local sel = 1
+    local spring = Tween.newSpring(0, 3)
+    local focus, chan = "songs", 1
+    local muted = { false, false, false, false }
+    local syncFlash, syncValue = 0, 0
+    local held_ = false
+    local pulse = Shake.new("bump")
+
+    Chiptune.onSync(function(v) syncFlash, syncValue = 20, v; pulse:add(0.7) end)
+
+    local function applyMute()
+        local m = {}
+        local names = { "pu1", "pu2", "wav", "noi" }
+        for c = 1, 4 do if muted[c] then m[#m + 1] = names[c] end end
+        Chiptune.mute(m)
+    end
+
+    scenes.music = {
+        enter = function() focus = "songs" end,
+        leave = function()
+            muted = { false, false, false, false }; applyMute()
+            Chiptune.hold(nil); held_ = false
+        end,
+        input = function()
+            if focus == "songs" then
+                sel = navigate(sel, #SONGS)
+                if pressed(A) then Chiptune.play(SONGS[sel].id, { restart = true }) end
+                if pressed(RIGHT) then focus = "mixer"; blip("cursor") end
+            else
+                if pressed(LEFT) then
+                    if chan == 1 then focus = "songs" else chan = chan - 1 end
+                    blip("cursor")
+                end
+                if pressed(RIGHT) and chan < 4 then chan = chan + 1; blip("cursor") end
+                if pressed(A) then muted[chan] = not muted[chan]; applyMute(); blip("toggle") end
+                if pressed(UP) or pressed(DOWN) then
+                    held_ = not held_
+                    local order = Chiptune.position()
+                    Chiptune.hold(held_ and order or nil)
+                    blip("toggle")
+                end
+            end
+            if pressed(B) then go("hub", "Scanline", "back") end
+        end,
+        update = function()
+            pulse:update()
+            if syncFlash > 0 then syncFlash = syncFlash - 1 end
+        end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            header("Chiptune: Music", chipOk and "GBM driver, DMG APU" or "C extension not built")
+            list(SONGS, sel, 10, 30, 170, 17, 8, spring, function(s) return s.title end)
+            gfx.setFont(fontBold)
+            gfx.drawText(SONGS[sel].style, 10, 172)
+            -- the mixer
+            Shake.apply(pulse)
+            local x0 = 215
+            panel(x0 - 12, 28, 190, 158)
+            local now = Chiptune.current()
+            gfx.setFont(fontTitle)
+            gfx.drawText(now and now:gsub("_", " ") or "(stopped)", x0, 38)
+            local order, row = Chiptune.position()
+            gfx.setFont(fontMono)
+            gfx.drawText(string.format("order %02d  row %02d%s", order, row, held_ and "  HOLD" or ""), x0, 58)
+            meters(x0 + 10, 82, 64, focus == "mixer" and chan or nil, muted)
+            if syncFlash > 0 then
+                gfx.setFont(fontBold)
+                gfx.fillRect(x0, 164, 160, 16)
+                gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+                gfx.drawText(string.format("sync E%02X", syncValue), x0 + 4, 165)
+                gfx.setImageDrawMode(gfx.kDrawModeCopy)
+            end
+            Shake.pop()
+            if focus == "songs" then
+                footer("A play   right: mixer   B back")
+            else
+                footer("left/right channel   A mute   up/down hold order   B back")
+            end
+        end,
+    }
+end
+
+-- ─── chiptune: sfx ─────────────────────────────────────────────────────────
+
+do
+    local names = {}
+    local sel = 1
+    local COLS, ROWS = 3, 13
+    local flash = 0
+    scenes.sfx = {
+        enter = function()
+            names = Chiptune.sfxNames()
+            if not Chiptune.isPlaying() then Chiptune.play("crimson_clash") end
+        end,
+        input = function()
+            local n = #names
+            if n > 0 then
+                local col, row = (sel - 1) // ROWS, (sel - 1) % ROWS
+                if pressed(UP) then row = (row - 1) % ROWS end
+                if pressed(DOWN) then row = (row + 1) % ROWS end
+                if pressed(LEFT) then col = (col - 1) % COLS end
+                if pressed(RIGHT) then col = (col + 1) % COLS end
+                local s = col * ROWS + row + 1
+                if s <= n then sel = s end
+                if pressed(A) then Chiptune.sfx(names[sel]); flash = 6 end
+            end
+            if pressed(B) then go("hub", "Pixel Shift", "back") end
+        end,
+        update = function() if flash > 0 then flash = flash - 1 end end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            header("Chiptune: SFX", #names .. " effects over the music")
+            gfx.setFont(fontBold)
+            if #names == 0 then
+                gfx.drawText("Needs the C extension (python tools/build_demo.py).", 20, 60)
+            end
+            for i, n in ipairs(names) do
+                local col, row = (i - 1) // ROWS, (i - 1) % ROWS
+                local x, y = 10 + col * 112, 28 + row * 14
+                if i == sel then
+                    gfx.fillRect(x - 2, y - 1, 108, 14)
+                    gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+                end
+                gfx.drawText(n, x + 2, y)
+                gfx.setImageDrawMode(gfx.kDrawModeCopy)
+            end
+            meters(346, 36, 150, nil, nil)
+            footer("d-pad pick   A fire (the music ducks)   B back")
+        end,
+    }
+end
+
+-- ─── jukebox ───────────────────────────────────────────────────────────────
+
+do
+    local playing = "surf"
+    local ok = true
+    local ducked = false
+    scenes.jukebox = {
+        enter = function()
+            Chiptune.stop()
+            ok = Jukebox.play(playing)
+        end,
+        leave = function() Jukebox.stop() end,
+        input = function()
+            if pressed(A) and ok then
+                local to = playing == "surf" and "waltz" or "surf"
+                Jukebox.switch(playing, to, 0.6, 0.6)
+                playing = to
+                blip("select")
+            end
+            if pressed(UP) then Jukebox.duck(nil, 0.2); ducked = true end
+            if pressed(DOWN) then Jukebox.restore(0.6); ducked = false end
+            if pressed(B) then go("hub", "Fade", "back") end
+        end,
+        update = function() end,
+        draw = function()
+            gfx.clear(gfx.kColorWhite)
+            header("Jukebox", "streamed music")
+            gfx.setFont(fontTitle)
+            if not ok then
+                gfx.drawTextInRect("No tracks: build_demo.py renders them with tools/chiptune.py.", 20, 60, 360, 60)
+            else
+                gfx.drawText("Now: " .. (Jukebox.current() == "surf" and "Tidal Twang" or "Willow Lane"), 20, 40)
+                gfx.setFont(fontBold)
+                gfx.drawText(ducked and "ducked" or "full volume", 20, 64)
+            end
+            gfx.setFont(fontBold)
+            gfx.drawTextInRect("The same chiptune songs, rendered to ADPCM files at build time " ..
+                               "(tools/chiptune.py render-all): how a game plays this music without " ..
+                               "the C extension. A crossfade runs on the fileplayer's own fade, on " ..
+                               "the audio thread.", 20, 96, 360, 110)
+            footer("A crossfade   up duck   down restore   B back")
+        end,
+    }
+end
+
+-- ─── the loop ──────────────────────────────────────────────────────────────
+
+scenes.hub.enter()
 
 function playdate.update()
     SfxKit.frame()          -- must be first: resets this frame's emit budget
-    tick += 1
-    Backgrounds.update()
-
-    local cc = playdate.getCrankChange()
-    if math.abs(cc) > 1 then
-        transSpeed = max(8, min(60, transSpeed + cc * 0.12))
-    end
-
-    if autoPlay then
-        autoStep()
-    elseif not Transitions.active then
-        handleInput()
-    end
-
-    Transitions.draw(drawScene)
-
-    playdate.drawFPS(2, 2)
+    Tween.update()
+    Chiptune.update()
+    tick = tick + 1
+    local s = scenes[current]
+    if not Transitions.active then s.input() end
+    s.update()
+    Transitions.draw(function() scenes[current].draw() end)
 end
-
-local sysMenu = playdate.getSystemMenu()
-sysMenu:addMenuItem("Reset Speed", function() transSpeed = 24 end)
-sysMenu:addMenuItem("Auto Showcase", function()
-    autoPlay = true
-    autoPause = 10
-    scene = "menu"
-end)

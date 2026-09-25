@@ -13,5 +13,6 @@ require("tween_test")
 require("shake_test")
 require("particles_test")
 require("backgrounds_test")
+require("chiptune_test")   -- last: it stands in a fake playdate global
 
 require("assert").done()

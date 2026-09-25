@@ -80,3 +80,24 @@ header.
 imports. A syntax error in an unimported file fails the consumer's build. This
 is why every file here must be valid Playdate Lua even when it is only ever run
 on the host.
+
+## 9. The one module with C in it
+
+`chiptune` is a Lua module over a C extension (`chiptune/`), because what it
+does -- a tracker driver and an APU emulator at 44.1 kHz -- is not work for
+Lua on this CPU. The rules above carry over:
+
+- `chiptune.lua` follows rules 1-3: it loads under host `lua`, touches nothing
+  until `Chiptune.load`, and with no `chiptune_native` present every call is
+  a no-op (`Chiptune.available` is false).
+- The C splits the same way: `gbapu.c`, `gbm.c` and `chip.c` are pure C99 with
+  no SDK header, and are what `python tools/chiptune.py test` compiles and
+  runs on the host. Only `chiptune_pd.c` / `chiptune_main.c` include
+  `pd_api.h`.
+- The driver is a port held to the original's behaviour by recorded traces
+  (`test/chiptune/golden.zip`). A change to `gbm.c` that alters any APU write
+  fails that test; if the change is meant to, say so and re-record, don't
+  loosen the comparison.
+- The game thread never calls into the driver directly: it posts to `chip.c`'s
+  queue, which the audio callback drains. Keep it that way; the audio callback
+  is an interrupt on the device.
