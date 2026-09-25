@@ -135,15 +135,15 @@ Each is a style and a set of chiptune techniques.
 
 | file | style | format | techniques |
 |---|---|---|---|
-| `cloud_garden.gbm` | main menu, D major, 90 BPM | 2, 6 voices | a PWM pad holding its chord by arpeggio through a low-pass that opens across the song; a triangle flute with delayed vibrato and its echo three rows behind; broken chords panned left |
-| `tidal_twang.gbm` | surf rock, E, 179 BPM | 1 (DMG) | tremolo picking by retrigger (`9x2`); a glissando by slide; a pulse kick sharing PU2 with the chord stabs; a pluck bass on the wave synth |
-| `jungle_pulse.gbm` | drum & bass, F minor, 170 BPM | 2, 8 voices | a sampled 808 break with retrigger rolls on two voices of its own; a reese of two saws detuned in a table, through a resonant low-pass swinging open and shut; a triangle sub; a sync marker at the drop |
-| `crimson_clash.gbm` | JRPG battle, A minor, 163 BPM | 2, 7 voices | a hard-sync lead (a silent master, a saw above it sweeping through a table); SID drums (noise then a falling triangle; tone then noise; a pulse tom); PWM brass stabs; 16th-note broken chords |
-| `willow_lane.gbm` | village waltz, G major, 3/4 | 1 (DMG) | duty swept by table, the Game Boy's PWM; 12-row bars; oom-pa-pa by arpeggio with auto-cut; a walking bass; a borrowed C minor; a countermelody |
-| `hollow_deep.gbm` | dungeon, D phrygian, 100 BPM | 2, 7 voices | a ring-modulated bell (a triangle times a silent square a tritone and octave up); a wave drone through a resonant band-pass drifting by cutoff slides; portamento and echo; the 808 kick sample two octaves down as a boom |
-| `neon_acid.gbm` | acid house, A minor, 128 BPM | 2, 6 voices | the 303: a saw through a screaming low-pass whose cutoff each note sweeps down through its table, accents, slides by portamento; four-on-the-floor 808 samples; PWM stabs moving in opposite directions |
-| `victory.gbm` | fanfare | 2, 5 voices | PWM brass in two parts; a SID snare roll; a song that ends (`onEnd`) |
-| `fade_out.gbm` | game over | 1 (DMG) | a slow fall over a chromatic bass and its quieter echo |
+| `cloud_garden.gbm` | main menu, D major, 90 BPM, a light swing | 2, 6 voices | a PWM pad holding its chord by arpeggio through a low-pass that opens by timed stages and closes for the loop; a triangle flute with an articulated attack (accent, scoop) and delayed vibrato, its echo three rows behind; broken chords panned left; a warm saw-wave bass |
+| `tidal_twang.gbm` | surf rock, E, 179 BPM | 1 (DMG) | tremolo picking by retrigger (`9x2`); a glissando by slide; an articulated twang; a pulse kick sharing PU2 with the chord stabs; a pluck bass on the wave synth; ghost snares, accented hats, a crash on each section |
+| `jungle_pulse.gbm` | drum & bass, F minor, 170 BPM | 2, 8 voices | a sampled break with dynamics (ghost snares, accented hats) and crescendo rolls (`9A2`), from a kit driven for the speaker; a reese of two saws detuned in a table through a resonant low-pass swinging between set bounds; the filter opening over the intro and closing the bass out of the breakdown; a sync marker at the drop |
+| `crimson_clash.gbm` | JRPG battle, A minor, 163 BPM | 2, 7 voices | a hard-sync lead (a silent master; a saw above it sweeping up and settling, with an accent); SID drums (noise then a falling triangle; tone then noise; a pulse tom); 16th arps, then 8ths an octave up for the bridge; a saw bass walking in a semitone under each chord; PWM brass on a 3+3+2 accent |
+| `willow_lane.gbm` | village waltz, G major, 3/4 | 1 (DMG) | duty swept by table with a scoop into each note, the Game Boy's PWM; 12-row bars; oom-pa-pa by arpeggio with auto-cut; a walking bass on a warm saw wave; a borrowed C minor; a countermelody |
+| `hollow_deep.gbm` | dungeon, D phrygian, 100 BPM, 16 bars | 2, 7 voices | a ring-modulated bell (a triangle times a silent square a tritone and octave up); a wave drone through a resonant band-pass drifting within set bounds; a ghost line resolving phrygian-wise (F over E-flat, sliding to D), its echo; the snare sample two octaves down as a rumble; a B-flat to A cadence |
+| `neon_acid.gbm` | acid house, A minor, 128 BPM, house swing | 2, 6 voices | the 303: a saw through a screaming low-pass whose cutoff each note sweeps down through its table, accents, slides sized to each jump (3-7 frames) that do not restart the filter; the build: closed then open tables and more resonance, a two-bar break without the kick, a clap roll; kick driven for the speaker; PWM stabs in opposite directions |
+| `victory.gbm` | fanfare | 2, 5 voices | PWM brass in two parts, the lead articulated; a pulse bass walking up; a SID snare roll; a song that ends (`onEnd`) |
+| `fade_out.gbm` | game over | 1 (DMG) | a slow fall over a chromatic bass, sighs of chord tones under it, F minor borrowed at the end |
 
 The songs are code, in `tools/chiptune_songs.py`; `python tools/chiptune.py
 songs` rebuilds `music/`.
@@ -193,6 +193,23 @@ instrument, `+xyy` a command, `+Gxxyy` an extended command (format 2).
 (`Song(name)`, `s.inst('pulse' | 'wave' | 'noise', ...)`) plays on a real
 Game Boy's terms; the recipes `noise_kick`, `noise_snare`, `pulse_kick`,
 `sweep_kick`, `wave_kick`, `synth` and `sample_inst` work there.
+
+### Mixing for a small speaker
+
+A speaker the size of the Playdate's plays little below a few hundred Hz,
+so a part that is all fundamental -- a triangle bass, a sine kick -- is full
+in headphones and nearly gone on the device. What survives is harmonics. The
+songs give every part that must carry on the device some: `bass_wave()` (a
+warm low-passed saw) for basses, `punch_kit()` (a kick sweeping from ~350 Hz
+under a click, driven into soft clipping; a snare with a body) for sampled
+drums, pulse and SID recipes for the rest, and keep pure triangles for
+doubling (a sub for headphones). As measured through a 300 Hz high-pass
+standing in for the speaker, `punch_kit`'s kick delivers about three times
+the old kick's energy there, and the songs' basses 1.4 to 2 times what they had.
+
+`articulation()` builds a lead's attack table -- an accent fading into a
+held sustain, and a scoop up into the pitch -- which is most of what makes a
+chip lead sound played rather than switched on.
 
 ### Channels
 

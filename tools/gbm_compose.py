@@ -29,7 +29,7 @@ digits after `+`: `+G10` cutoff, `+G11` resonance/mode, `+G12` cutoff slide,
 import math
 import re
 
-from gbm_format import WAVES, new_instrument, NOTE_OFF, FX
+from gbm_format import WAVES, new_instrument, NOTE_OFF, FX, env_byte
 
 PC = dict(C=0, D=2, E=4, F=5, G=7, A=9, B=11)
 NOTE_NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-']
@@ -431,3 +431,59 @@ def sample_inst(song, sample, name, volume=0, noise_volume=None, **o):
         names.append(sample['name'])
     return song.inst('noise', name, volume=volume if noise_volume is None else noise_volume,
                      envPace=o.pop('envPace', 1), sample=names.index(sample['name']), **o)
+
+
+# ─── mixing for a small speaker ───────────────────────────────────────────
+#
+# A speaker the size of the Playdate's reproduces little below a few hundred
+# Hz: a bass that is all fundamental (a triangle, a sine kick) is loud in
+# headphones and nearly gone on the device. What survives is harmonics, so
+# the parts that must carry on the device get waveforms with some.
+
+def punch_kit():
+    """Drums synthesised for a small speaker as well as headphones: the kick
+    sweeps from ~350 Hz down to 55 Hz under a click and is driven into soft
+    clipping, whose harmonics are what a small speaker plays; the snare has
+    a 190 Hz body under its noise, also driven. Rim, hat and clap as in
+    synth_kit."""
+    base = {s['name']: s for s in synth_kit()}
+    ph = [0.0]
+    n1, n2 = _noise(5), _noise(9)
+
+    def kick(t, i):
+        f = 55 + 300 * math.exp(-t * 45)
+        ph[0] += 2 * math.pi * f / SAMPLE_RATE
+        body = math.sin(ph[0]) * math.exp(-t * 13)
+        click = n1() * math.exp(-t * 900) * 0.8
+        return math.tanh((body + click) * 2.6)
+
+    def snare(t, i):
+        tone = (math.sin(2 * math.pi * 190 * t) + 0.5 * math.sin(2 * math.pi * 380 * t)) * math.exp(-t * 26)
+        return math.tanh((0.7 * tone + 0.9 * n2() * math.exp(-t * 15)) * 2.0)
+    return [dict(name='pkick', data=to4bit(_render(0.18, kick))),
+            dict(name='psnare', data=to4bit(_render(0.17, snare))),
+            base['rim'], base['hat'], base['clap']]
+
+
+def bass_wave(song, cutoff=0.45):
+    """A wave for a bass that a small speaker can place: a saw, low-passed
+    so it is warm rather than buzzy, keeping its first few harmonics."""
+    return song.wave(synth_waves(shape='saw', filter='lowpass', cutoff=cutoff, resonance=0.2, frames=1)[0])
+
+
+def articulation(song, name, peak, sustain, scoop=0, frames=3, pace=1, hold_pace=0, extra=None):
+    """A table for a lead's attack: the note starts at `peak` and fading,
+    `scoop` period units flat and bending up, then settles at `sustain`
+    after `frames` frames (holding, or decaying at `hold_pace`) -- the
+    accent-then-sustain and the slide-in a flat envelope cannot give.
+    `extra` (a list of column dicts, one per row) is merged in: a duty
+    sweep, say, riding on the same rows."""
+    rows = [dict(env=env_byte(peak, -1, pace), pitch=-scoop)]
+    for k in range(1, frames):
+        rows.append(dict(pitch=-(scoop * (frames - k)) // frames))
+    rows.append(dict(env=env_byte(sustain, -1, hold_pace), pitch=0))
+    for i, e in enumerate(extra or []):
+        while len(rows) <= i:
+            rows.append({})
+        rows[i] = dict(rows[i], **e)
+    return song.table(f'{name} articulation', rows)
