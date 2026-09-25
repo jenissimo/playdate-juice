@@ -143,7 +143,7 @@ local function meters(x, y, h, cursor, muted, step)
     step = step or 30
     local bw = min(22, step - 2)
     local lv = { Chiptune.levels() }
-    local names = { "PU1", "PU2", "WAV", "NOI" }
+    local names = step >= 30 and { "PU1", "PU2", "WAV", "NOI" } or { "P1", "P2", "W", "N" }
     gfx.setFont(fontBold)
     for c = 1, 4 do
         local v = lv[c] or 0
@@ -185,17 +185,20 @@ local held = playdate.buttonIsPressed
 local UP, DOWN, LEFT, RIGHT = playdate.kButtonUp, playdate.kButtonDown, playdate.kButtonLeft, playdate.kButtonRight
 local A, B = playdate.kButtonA, playdate.kButtonB
 
--- Up/down with auto-repeat, wrapping.
-local repeatTimer = 0
+-- Held arrows repeat: a press, then after a third of a second one step every
+-- 3 frames. `stepped` is what every exhibit reads for the d-pad.
+local heldFrames = { [UP] = 0, [DOWN] = 0, [LEFT] = 0, [RIGHT] = 0 }
+local function trackHeld()
+    for b in pairs(heldFrames) do heldFrames[b] = held(b) and heldFrames[b] + 1 or 0 end
+end
+local function stepped(b)
+    local h = heldFrames[b]
+    return pressed(b) or (h > 10 and h % 3 == 0)
+end
+
+-- Up/down through a list of n, wrapping at both ends.
 local function navigate(sel, n)
-    local d = 0
-    if pressed(UP) then d = -1 elseif pressed(DOWN) then d = 1 end
-    if d == 0 and (held(UP) or held(DOWN)) then
-        repeatTimer = repeatTimer + 1
-        if repeatTimer > 10 and repeatTimer % 3 == 0 then d = held(UP) and -1 or 1 end
-    elseif d == 0 then
-        repeatTimer = 0
-    end
+    local d = stepped(UP) and -1 or (stepped(DOWN) and 1 or 0)
     if d ~= 0 then
         blip("cursor")
         return (sel - 1 + d) % n + 1
@@ -287,8 +290,8 @@ do
             else
                 if pressed(A) then bg = bg % Backgrounds.count + 1; play("fwd") end
                 if pressed(B) then mode = "list"; play("back") end
-                if pressed(LEFT) then bg = (bg - 2) % Backgrounds.count + 1 end
-                if pressed(RIGHT) then bg = bg % Backgrounds.count + 1 end
+                if stepped(LEFT) then bg = (bg - 2) % Backgrounds.count + 1 end
+                if stepped(RIGHT) then bg = bg % Backgrounds.count + 1 end
             end
         end,
         update = function() if mode == "card" then Backgrounds.update(bg) end end,
@@ -336,8 +339,8 @@ do
     local seed = 1
     scenes.backgrounds = {
         input = function()
-            if pressed(RIGHT) or pressed(DOWN) then bg = bg % Backgrounds.count + 1; blip("cursor") end
-            if pressed(LEFT) or pressed(UP) then bg = (bg - 2) % Backgrounds.count + 1; blip("cursor") end
+            if stepped(RIGHT) or stepped(DOWN) then bg = bg % Backgrounds.count + 1; blip("cursor") end
+            if stepped(LEFT) or stepped(UP) then bg = (bg - 2) % Backgrounds.count + 1; blip("cursor") end
             if pressed(A) then seed = seed + 1; Backgrounds.reset(bg, seed * 7919); blip("select") end
             if pressed(B) then go("hub", "Dissolve", "back") end
         end,
@@ -559,11 +562,12 @@ do
                 if pressed(A) then Chiptune.play(SONGS[sel].id, { restart = true }) end
                 if pressed(RIGHT) then focus = "mixer"; blip("cursor") end
             else
-                if pressed(LEFT) then
-                    if chan == 1 then focus = "songs" else chan = chan - 1 end
-                    blip("cursor")
+                if pressed(LEFT) and chan == 1 then
+                    focus = "songs"; blip("cursor")
+                elseif stepped(LEFT) and chan > 1 then
+                    chan = chan - 1; blip("cursor")
                 end
-                if pressed(RIGHT) and chan < 4 then chan = chan + 1; blip("cursor") end
+                if stepped(RIGHT) then chan = chan % 4 + 1; blip("cursor") end
                 if pressed(A) then muted[chan] = not muted[chan]; applyMute(); blip("toggle") end
                 if pressed(UP) or pressed(DOWN) then
                     held_ = not held_
@@ -627,13 +631,17 @@ do
         input = function()
             local n = #names
             if n > 0 then
+                -- Wrapping on both axes; the last column is short, so a row
+                -- wraps within the column it is in.
                 local col, row = (sel - 1) // ROWS, (sel - 1) % ROWS
-                if pressed(UP) then row = (row - 1) % ROWS end
-                if pressed(DOWN) then row = (row + 1) % ROWS end
-                if pressed(LEFT) then col = (col - 1) % COLS end
-                if pressed(RIGHT) then col = (col + 1) % COLS end
-                local s = col * ROWS + row + 1
-                if s <= n then sel = s end
+                local cols = (n - 1) // ROWS + 1
+                local function height(c) return min(ROWS, n - c * ROWS) end
+                local moved = false
+                if stepped(UP) then row = (row - 1) % height(col); moved = true end
+                if stepped(DOWN) then row = (row + 1) % height(col); moved = true end
+                if stepped(LEFT) then col = (col - 1) % cols; row = min(row, height(col) - 1); moved = true end
+                if stepped(RIGHT) then col = (col + 1) % cols; row = min(row, height(col) - 1); moved = true end
+                if moved then sel = col * ROWS + row + 1; blip("cursor") end
                 if pressed(A) then Chiptune.sfx(names[sel]); flash = 6 end
             end
             if pressed(B) then go("hub", "Pixel Shift", "back") end
@@ -713,6 +721,7 @@ scenes.hub.enter()
 
 function playdate.update()
     SfxKit.frame()          -- must be first: resets this frame's emit budget
+    trackHeld()
     Tween.update()
     Chiptune.update()
     tick = tick + 1
