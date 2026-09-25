@@ -198,7 +198,8 @@ int main(int argc, char **argv)
                 /* where the loop begins: the first time its order plays */
                 if (!entered && g->order == g->loop_order) { entered = 1; loop_at = n - step; }
                 last_order = g->order;
-            } else if (!played || (!g->playing && !g->ch[4].prio && !g->ch[5].prio && !gbapu_active(&chip.apu))) {
+            } else if (!played || (!g->playing && !g->ch[GBM_SLOT0].prio && !g->ch[GBM_SLOT1].prio &&
+                                   !gbapu_active(&chip.apu) && !vox_active(&chip.vox))) {
                 /* the end: let the DC blocker settle for a moment */
                 if (++silent > 6) break;
             }

@@ -5,8 +5,6 @@
 -- menu theme and the blips from chiptune. Built by tools/build_demo.py.
 import "CoreLibs/graphics"
 import "transitions"
-import "sfxkit"          -- before "sounds": that module is written on top of it
-import "sounds"
 import "backgrounds"
 import "tween"
 import "shake"
@@ -32,12 +30,6 @@ assert(fontBold and fontTitle and fontMono)
 
 -- ─── audio ─────────────────────────────────────────────────────────────────
 
--- All sound allocation happens here, before the first update.
-TransitionSounds.load()
-SfxKit.define("tick", { prio = 3, notes = {
-    { group = "sq", hz = 900, vol = 0.15, len = 0.03, adsr = { 0.001, 0.03, 0, 0.01 } },
-} })
-
 -- Each song shows a style and a set of chiptune techniques (GB: the four
 -- Game Boy channels exactly; v2: the extended format's voices).
 local SONGS = {
@@ -62,9 +54,15 @@ if not chipOk then print(chipErr) end
 Jukebox.load({ tracks = { surf = "jukebox/tidal_twang", waltz = "jukebox/willow_lane" },
                volumes = { surf = 0.7, waltz = 0.7 } })
 
--- A named chiptune effect, or the synth tick when the extension is missing.
-local function blip(name)
-    if not (chipOk and Chiptune.sfx(name)) then SfxKit.emit("tick") end
+-- A named chiptune effect (silent without the extension).
+local function blip(name) Chiptune.sfx(name) end
+
+-- Transitions.start looks for a TransitionSounds global and calls play(name,
+-- dir) as a wipe begins: here each transition's whoosh from the SFX bank.
+TransitionSounds = { enabled = false }
+function TransitionSounds.play(name, dir)
+    if not TransitionSounds.enabled then return false end
+    return Chiptune.sfx("tr_" .. name:lower():gsub(" ", "_") .. "_" .. dir)
 end
 
 function playdate.gameWillPause() Chiptune.pause(); Jukebox.pause() end
@@ -220,9 +218,8 @@ local EXHIBITS = {
     { id = "backgrounds", name = "Backgrounds",       blurb = "17 looping procedural backgrounds",   fx = "Dissolve" },
     { id = "tween",       name = "Tween",             blurb = "31 easings, springs, sequences",      fx = "Slide" },
     { id = "impact",      name = "Shake & Particles", blurb = "Trauma shake, pooled 1-bit particles", fx = "Shatter" },
-    { id = "sfxkit",      name = "SfxKit",            blurb = "Synth sound effects as data",         fx = "Blinds" },
     { id = "music",       name = "Chiptune: Music",   blurb = "9 songs: Game Boy and 8-voice SID-style", fx = "Scanline" },
-    { id = "sfx",         name = "Chiptune: SFX",     blurb = "38 effects that duck the music",      fx = "Pixel Shift" },
+    { id = "sfx",         name = "Chiptune: SFX",     blurb = "84 effects that duck the music",      fx = "Pixel Shift" },
     { id = "jukebox",     name = "Jukebox",           blurb = "Streamed files, crossfades, ducking", fx = "Fade" },
 }
 local hubSel = 1
@@ -443,9 +440,7 @@ do
     local crankSparks = 0
     Shake.load(); Particles.load()
 
-    local function sound(chipName)
-        if not (chipOk and Chiptune.sfx(chipName)) then SfxKit.emit("t:Shatter", "fwd") end
-    end
+    local function sound(chipName) Chiptune.sfx(chipName) end
 
     scenes.impact = {
         input = function()
@@ -494,45 +489,6 @@ do
             gfx.drawRect(60, 32, 100, 8)
             gfx.fillRect(60, 32, floor(100 * max(shaker.trauma, quake.trauma)), 8)
             footer("A hit   up quake   down sparks   crank: fountain   B back")
-        end,
-    }
-end
-
--- ─── sfxkit ────────────────────────────────────────────────────────────────
-
-do
-    local names = {}
-    for n in pairs(TransitionSounds.FX) do names[#names + 1] = n end
-    table.sort(names)
-    local sel = 1
-    local spring = Tween.newSpring(0, 3)
-    local last = ""
-    scenes.sfxkit = {
-        enter = function() Chiptune.stop() end,
-        leave = function() end,
-        input = function()
-            sel = navigate(sel, #names)
-            if pressed(A) or pressed(RIGHT) then
-                local dir = pressed(RIGHT) and "back" or "fwd"
-                last = SfxKit.emit("t:" .. names[sel], dir) and (names[sel] .. " (" .. dir .. ")") or "dropped: budget"
-            end
-            if pressed(B) then go("hub", "Blinds", "back") end
-        end,
-        update = function() end,
-        draw = function()
-            gfx.clear(gfx.kColorWhite)
-            header("SfxKit", #names .. " recipes")
-            list(names, sel, 10, 30, 170, 15, 12, spring)
-            gfx.setFont(fontBold)
-            local rows = TransitionSounds.FX[names[sel]]
-            gfx.drawText("notes in this recipe:", 200, 34)
-            for i, r in ipairs(rows) do
-                gfx.drawText(string.format("%-5s %4d Hz  %.2fs", r[1], r[7], r[9]), 200, 36 + i * 16)
-            end
-            gfx.drawTextInRect("Voices come from a pool allocated at load time, by audio time and by frame: " ..
-                               "two sounds in one frame never delete each other's notes.", 200, 120, 190, 70)
-            gfx.drawText(last, 200, 196)
-            footer("A play forward   right: backward   B back")
         end,
     }
 end
@@ -627,10 +583,13 @@ end
 -- ─── chiptune: sfx ─────────────────────────────────────────────────────────
 
 do
+    -- Row-major, three to a row, scrolling: the bank has 84 effects (a
+    -- whoosh each way for every transition among them) and 13 rows show.
     local names = {}
     local sel = 1
-    local COLS, ROWS = 3, 13
-    local flash = 0
+    local COLS, VISIBLE = 3, 13
+    local top = 0                 -- the first row on screen
+    local spring = Tween.newSpring(0, 3)
     scenes.sfx = {
         enter = function()
             names = Chiptune.sfxNames()
@@ -639,22 +598,28 @@ do
         input = function()
             local n = #names
             if n > 0 then
-                -- Wrapping on both axes; the last column is short, so a row
-                -- wraps within the column it is in.
-                local col, row = (sel - 1) // ROWS, (sel - 1) % ROWS
-                local cols = (n - 1) // ROWS + 1
-                local function height(c) return min(ROWS, n - c * ROWS) end
+                local rows = (n - 1) // COLS + 1
+                local row, col = (sel - 1) // COLS, (sel - 1) % COLS
                 local moved = false
-                if stepped(UP) then row = (row - 1) % height(col); moved = true end
-                if stepped(DOWN) then row = (row + 1) % height(col); moved = true end
-                if stepped(LEFT) then col = (col - 1) % cols; row = min(row, height(col) - 1); moved = true end
-                if stepped(RIGHT) then col = (col + 1) % cols; row = min(row, height(col) - 1); moved = true end
-                if moved then sel = col * ROWS + row + 1; blip("cursor") end
-                if pressed(A) then Chiptune.sfx(names[sel]); flash = 6 end
+                if stepped(UP) then row = (row - 1) % rows; moved = true end
+                if stepped(DOWN) then row = (row + 1) % rows; moved = true end
+                if stepped(LEFT) then col = (col - 1) % COLS; moved = true end
+                if stepped(RIGHT) then col = (col + 1) % COLS; moved = true end
+                -- the crank scrolls a row per notch of about 30 degrees
+                local ticks = playdate.getCrankTicks(12)
+                if ticks ~= 0 then row = max(0, min(rows - 1, row + ticks)); moved = true end
+                if moved then
+                    sel = min(n, row * COLS + col + 1)
+                    blip("cursor")
+                end
+                row = (sel - 1) // COLS
+                if row < top then top = row end
+                if row >= top + VISIBLE then top = row - VISIBLE + 1 end
+                if pressed(A) then Chiptune.sfx(names[sel]) end
             end
             if pressed(B) then go("hub", "Pixel Shift", "back") end
         end,
-        update = function() if flash > 0 then flash = flash - 1 end end,
+        update = function() end,
         draw = function()
             gfx.clear(gfx.kColorWhite)
             header("Chiptune: SFX", #names .. " effects over the music")
@@ -662,18 +627,34 @@ do
             if #names == 0 then
                 gfx.drawText("Needs the C extension (python tools/build_demo.py).", 20, 60)
             end
-            for i, n in ipairs(names) do
-                local col, row = (i - 1) // ROWS, (i - 1) % ROWS
-                local x, y = 8 + col * 100, 28 + row * 14
-                if i == sel then
-                    gfx.fillRect(x - 2, y - 1, 98, 14)
-                    gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+            local n = #names
+            local rows = (n - 1) // COLS + 1
+            -- the list glides to its scroll position
+            local y0 = 28 - floor(spring:update(top * 14) + 0.5)
+            gfx.setClipRect(0, 24, 300, VISIBLE * 14 + 4)
+            for i, name in ipairs(names) do
+                local row, col = (i - 1) // COLS, (i - 1) % COLS
+                local x, y = 6 + col * 98, y0 + row * 14
+                if y > 10 and y < 24 + VISIBLE * 14 + 4 then
+                    if i == sel then
+                        gfx.fillRect(x - 2, y - 1, 96, 14)
+                        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+                    end
+                    gfx.drawText((plain(name):gsub("^tr ", "~")), x + 2, y)
+                    gfx.setImageDrawMode(gfx.kDrawModeCopy)
                 end
-                gfx.drawText(plain(n), x + 2, y)
-                gfx.setImageDrawMode(gfx.kDrawModeCopy)
             end
-            meters(308, 34, 160, nil, nil, 90)
-            footer("d-pad pick   A fire (the music ducks)   B back")
+            gfx.clearClipRect()
+            -- the scroll bar
+            if rows > VISIBLE then
+                local h = VISIBLE * 14
+                local bh = max(10, floor(h * VISIBLE / rows))
+                local by = 28 + floor((h - bh) * top / (rows - VISIBLE))
+                gfx.drawRect(300, 28, 4, h)
+                gfx.fillRect(300, by, 4, bh)
+            end
+            meters(310, 34, 160, nil, nil, 88)
+            footer("d-pad / crank pick   A fire (the music ducks)   B back")
         end,
     }
 end
@@ -728,7 +709,6 @@ end
 scenes.hub.enter()
 
 function playdate.update()
-    SfxKit.frame()          -- must be first: resets this frame's emit budget
     trackHeld()
     Tween.update()
     Chiptune.update()

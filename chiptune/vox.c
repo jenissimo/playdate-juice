@@ -77,7 +77,10 @@ void vox_trigger(Vox *x, int i, uint8_t osc, uint16_t pitch, uint8_t env)
     v->on = (env & 0xF8) != 0;       /* the DMG's DAC rule: volume 0, decreasing, is off */
     set_env(x, v, env);
     set_pitch(x, v, pitch);
-    v->phase = 0.0f;
+    /* A Game Boy retrigger restarts the envelope, not the pulse's duty
+       position; resetting the phase too clicks on every retrigger -- 30
+       times a second in a 9x2 tremolo. The wave's position does restart. */
+    if (v->osc == OSC_WAVE) v->phase = 0.0f;
     v->smp_pos = 0.0f;
     v->lfsr = 0x7FFF;
     v->sweep_timer = (v->sweep >> 4) & 7;
@@ -292,17 +295,27 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
             case OSC_NOISE: {
                 uint16_t lfsr = v->lfsr;
                 const int short_mode = v->short_mode;
+                /* The LFSR's level averaged over the sample, as gbapu does: a
+                   bright noise steps the LFSR many times a sample, and taking
+                   only the value at the sample instant aliases it all into
+                   white hiss up to 22 kHz. */
+                const float inv = dt > 0.0f ? 1.0f / dt : 0.0f;
                 for (k = 0; k < m; k++) {
-                    float o = (lfsr & 1) ? -amp : amp;
+                    float o, acc = 0.0f, rem = dt;
                     cur_sq[k] = (lfsr & 1) ? -1.0f : 1.0f;
                     cur_wr[k] = 0;
-                    ph += dt;
-                    while (ph >= 1.0f) {
+                    while (ph + rem >= 1.0f) {
                         uint16_t b = (lfsr ^ (lfsr >> 1)) & 1;
-                        ph -= 1.0f;
+                        float seg = 1.0f - ph;
+                        acc += (lfsr & 1) ? -seg : seg;
+                        rem -= seg;
+                        ph = 0.0f;
                         lfsr = (uint16_t)((lfsr >> 1) | (b << 14));
                         if (short_mode) lfsr = (uint16_t)((lfsr & ~0x40) | (b << 6));
                     }
+                    acc += (lfsr & 1) ? -rem : rem;
+                    ph += rem;
+                    o = (dt > 0.0f ? acc * inv : ((lfsr & 1) ? -1.0f : 1.0f)) * amp;
                     dl[k] += o;
                     dr[k] += o;
                 }
@@ -360,6 +373,13 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
 
         for (k = 0; k < m; k++) {
             float sl = bl[k], sr = br[k];
+            /* A soft knee: above 3/4 of full scale the excess is halved, so
+               a rare pile-up of voices bends instead of clipping (hard
+               clipping now takes 1.25x full scale). Rarely taken. */
+            if (sl > 24576.0f) sl = 24576.0f + (sl - 24576.0f) * 0.5f;
+            else if (sl < -24576.0f) sl = -24576.0f + (sl + 24576.0f) * 0.5f;
+            if (sr > 24576.0f) sr = 24576.0f + (sr - 24576.0f) * 0.5f;
+            else if (sr < -24576.0f) sr = -24576.0f + (sr + 24576.0f) * 0.5f;
             if (sl > 32767.0f) sl = 32767.0f; else if (sl < -32768.0f) sl = -32768.0f;
             if (sr > 32767.0f) sr = 32767.0f; else if (sr < -32768.0f) sr = -32768.0f;
             if (left) left[k] = (int16_t)sl;

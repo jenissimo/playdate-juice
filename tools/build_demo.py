@@ -4,9 +4,9 @@
     python tools/build_demo.py [--lua-only] [--no-device]
 
 The library modules live at the repo ROOT so that a consumer can add this repo
-as a submodule straight inside their Source/ and `import "juice/sfxkit"`. pdc,
+as a submodule straight inside their Source/ and `import "juice/tween"`. pdc,
 though, only compiles what is under the source folder it is given -- and
-`import "../sfxkit"` does not resolve outside it. So the demo build copies the
+`import "../tween"` does not resolve outside it. So the demo build copies the
 modules in, compiles, and cleans up. The copies are gitignored.
 
 The demo's OWN sources are kept as .lua.in for the same reason in reverse: pdc
@@ -36,7 +36,7 @@ OUT = os.path.join(DEMO_DIR, "Juice.pdx")
 BUILD = os.path.join(ROOT, "build")
 
 MODULES = [
-    "transitions.lua", "sfxkit.lua", "jukebox.lua", "chiptune.lua",
+    "transitions.lua", "jukebox.lua", "chiptune.lua",
     "tween.lua", "shake.lua", "particles.lua", "backgrounds.lua",
 ]
 JUKEBOX_SONGS = ["tidal_twang", "willow_lane"]
