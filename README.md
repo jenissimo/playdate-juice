@@ -1,17 +1,19 @@
 # playdate-juice
 
 Drop-in game-feel modules for [Playdate](https://play.date/): scene
-transitions, a procedural sound engine, music, tweens, screen shake, particles
-and animated backgrounds.
+transitions, a procedural sound engine, music, Game Boy chiptune, tweens,
+screen shake, particles and animated backgrounds.
 
-Seven independent files. Take one, take all of them — nothing here imports
-anything else in the repo.
+Eight independent modules. Take one, take all of them — nothing here imports
+anything else in the repo. Seven are single Lua files; chiptune is a Lua file
+plus a C extension (`chiptune/`).
 
 | Module | Global | What it is |
 |---|---|---|
 | `transitions.lua` | `Transitions` | 23 direction-aware scene transitions + a scene-hop plan |
 | `sfxkit.lua` | `SfxKit` | procedural SFX: voice pool, time-based allocator, recipes as data |
 | `jukebox.lua` | `Jukebox` | streamed music: crossfades, ducking, pause handling |
+| `chiptune.lua` + `chiptune/` | `Chiptune` | Game Boy tracker music and SFX: 8 songs, 38 effects, a C port of a real DMG driver |
 | `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs — zero per-frame allocation |
 | `shake.lua` | `Shake` | trauma-based screen shake with deterministic noise |
 | `particles.lua` | `Particles` | pooled 1-bit particle system |
@@ -150,6 +152,29 @@ that is already playing, not letting two crossfades race, and doing every fade
 through the fileplayer's own fade argument (which runs on the audio thread)
 rather than as a per-frame ramp on the busiest frames in the game.
 
+## chiptune
+
+```lua
+Chiptune.load{ songs = { title = "juice/chiptune/music/cloud_garden.gbm" },
+               sfx = "juice/chiptune/music/sfx.gbm" }
+Chiptune.play("title")
+Chiptune.sfx("coin")          -- the music ducks under it
+Chiptune.mute({ "wav" })      -- the song keeps time
+```
+
+GBM, a four-channel tracker driver for the original Game Boy, ported from SM83
+assembly to C and run on an emulated DMG APU inside the audio callback, so the
+tempo never depends on your frame rate. The port is held to the original write
+for write: its APU register writes match the original ROM's in an emulator,
+173,000 of them. Songs are a kilobyte or two. It ships with eight songs (a
+menu theme, surf rock, jungle, a JRPG battle, a waltz, a dungeon, a fanfare, a
+game over) and a 38-effect SFX library, all written as code you can read and
+change.
+
+It needs its C half built into the game (a few lines of CMake). Without it,
+`tools/chiptune.py render-all` turns the same music into ADPCM files for
+Jukebox. Everything else: [chiptune/README.md](chiptune/README.md).
+
 ## tween
 
 ```lua
@@ -191,17 +216,26 @@ so a long session never drifts.
 
 ## Demo
 
+The Zoo: one exhibit per module, with the chiptune songs as its soundtrack.
+
 ```bash
-python tools/build_demo.py && open demo/Juice.pdx
+python tools/build_demo.py            # Lua + the chiptune extension (simulator, and device with arm-none-eabi-gcc)
+python tools/build_demo.py --lua-only # no C compiler: runs without chiptune
 ```
+
+Then open `demo/Juice.pdx`. The build needs the Playdate SDK, CMake and a host
+C compiler for the extension; `ARM_GCC_BIN` can point at a toolchain that is
+not on PATH.
 
 ## Tests
 
 ```bash
-lua test/run.lua        # expect "N checks, 0 failures"
+lua test/run.lua                # expect "N checks, 0 failures"
+python tools/chiptune.py test   # the C port against the original ROM, the encoder, the songs
 ```
 
 ## License
 
 MIT. The transition driver, the sound engine and the paw/blink effects were
-extracted from [Nyandoku](https://github.com/jenissimo/nyandoku).
+extracted from [Nyandoku](https://github.com/jenissimo/nyandoku). The chiptune
+driver, its format, drum recipes and wave synth come from gameboy-lab.

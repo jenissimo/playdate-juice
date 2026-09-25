@@ -1,7 +1,13 @@
 *.pdx/
-# tools/build_demo.py stages the root modules and the demo .lua.in sources into
-# demo/Source to compile, then removes them. Ignored so an interrupted build
-# cannot commit a stale duplicate.
+# tools/build_demo.py stages the root modules, the demo .lua.in sources, the
+# music and the built C extension into demo/Source to compile, then removes
+# them. Ignored so an interrupted build cannot commit a stale duplicate.
 demo/Source/*.lua
 demo/Source/images/
+demo/Source/music/
+demo/Source/jukebox/
+demo/Source/pdex.*
 .sentry-native/
+# Host binaries and CMake trees from tools/chiptune.py and tools/build_demo.py.
+build/
+__pycache__/
