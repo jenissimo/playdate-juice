@@ -79,7 +79,9 @@ def build_native(sdk, device):
     sim = os.path.join(BUILD, "demo-sim")
     gen = ["-G", "Visual Studio 17 2022", "-A", "x64"] if os.name == "nt" else []
     cmake(["-S", DEMO_DIR, "-B", sim] + gen, env)
-    cmake(["--build", sim, "--config", "Release"], env)
+    # --clean-first: the build's post-step is what copies pdex into Source/,
+    # and a target CMake thinks is up to date would skip it.
+    cmake(["--build", sim, "--config", "Release", "--clean-first"], env)
     print("built the simulator extension")
     if not device:
         return True
@@ -93,7 +95,7 @@ def build_native(sdk, device):
     gen = ["-G", "Ninja"] if shutil.which("ninja") else (["-G", "MinGW Makefiles"] if os.name == "nt" else [])
     cmake(["-S", DEMO_DIR, "-B", dev, "-DCMAKE_BUILD_TYPE=Release",
            "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(sdk, "C_API", "buildsupport", "arm.cmake")] + gen, env)
-    cmake(["--build", dev], env)
+    cmake(["--build", dev, "--clean-first"], env)
     print("built the device extension")
     return True
 
