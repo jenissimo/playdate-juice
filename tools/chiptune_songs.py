@@ -393,11 +393,17 @@ def sfx_library():
     s.inst('pulse', 'alarm', duty=1, volume=12, envPace=0)
     s.inst('pulse', 'boing', duty=2, volume=12, envPace=2)
     s.inst('pulse', 'sweep', duty=2, volume=13, envPace=2, sweep=0x2E)
-    s.inst('noise', 'thud', volume=10, envPace=1)
+    # A low noise shape starts silent: after a trigger the LFSR has to shift
+    # 15 times before its first 0 reaches the output, and at a few hundred Hz
+    # that is most of a frame or more. So the low sounds trigger once, high,
+    # and fall by table (a new shape without a restart keeps the LFSR going).
+    fall = s.table('fall', [dict(transpose=-i) for i in range(0, 13)])
+    fall_short = s.table('fall short', [dict(transpose=-i) for i in range(0, 13, 2)])
+    s.inst('noise', 'thud', volume=11, envPace=1, table=fall_short)
     s.inst('noise', 'tick', volume=6, envPace=1)
     s.inst('noise', 'crack', volume=13, envPace=1)
-    s.inst('noise', 'boom', volume=15, envPace=5)
-    s.inst('noise', 'boom2', volume=13, envPace=3)
+    s.inst('noise', 'boom', volume=15, envPace=5, table=fall, tableSpeed=3)
+    s.inst('noise', 'boom2', volume=14, envPace=3, table=fall, tableSpeed=1)
     s.inst('noise', 'pew', volume=12, envPace=1, duty=1)
     s.inst('noise', 'creak', volume=9, envPace=2, duty=1)
     s.inst('noise', 'whoosh', volume=9, envPace=2)
@@ -421,7 +427,7 @@ def sfx_library():
         # movement
         ('jump', 'C4@jump+110 . . . . . . . . . . -', 1, 2, 1),
         ('double_jump', 'G4@jump+120 . . . . . . -', 1, 2, 1),
-        ('land', '#20@thud #16 #12 -', 3, 2, 1),
+        ('land', '#24@thud . . . . . . -', 3, 2, 1),
         ('step', '#30@tick . -', 3, 1, 1),
         ('dash', '#44@whoosh #42 #40 #38 #36 #34 #32 -', 3, 2, 1),
         ('bounce', 'C5@boing+118 . . . . . G5+218 . . . . . -', 1, 2, 1),
@@ -431,8 +437,8 @@ def sfx_library():
         ('hurt', 'A5@hurt+220 . F5 . . . -', 0, 3, 2),
         ('laser', 'C7@zap . . . . . . . . . -', 0, 2, 1),
         ('shoot', '#40@pew #36 #32 #28 -', 3, 2, 1),
-        ('explosion', '#12@boom #10 #8 #6 #5 #4 #3 . . . . . -', 3, 4, 3),
-        ('small_boom', '#18@boom2 #14 #10 #8 . . -', 3, 3, 2),
+        ('explosion', '#27@boom . . . . . . . . . . . . . . . -', 3, 4, 3),
+        ('small_boom', '#29@boom2 . . . . . . . . . -', 3, 3, 2),
         ('fuse', '#40@fuse+902 . . . . . . . . . . . . . . . . . . -', 3, 2, 1),
         ('sweep_shot', 'C6@sweep . . . . . . . -', 0, 2, 2),
         ('death', 'B4@hurt+204 . . F4 . . D4 . . B3 . . . . -', 0, 4, 3),
@@ -448,7 +454,7 @@ def sfx_library():
         ('win', 'C5@ping E5 G5 C6 . G5 C6 . . -', 1, 3, 4),
         ('lose', 'G4@hurt F#4 F4 E4 . . -', 1, 3, 5),
         # world
-        ('door', '#6@creak #7 #8 #6 #5 . #20@thud . -', 3, 2, 3),
+        ('door', '#24@creak #25 #26 #24 #23 . #24@thud . -', 3, 2, 3),
         ('charge', 'C4@charge+104 . . . . . . . . . . . . . . . . . . . . . . . -', 0, 2, 2),
         ('warp', 'C4@warp+0C7 E4 G4 C5 E5 G5 C6 E6 G6 C7 . -', 0, 3, 2),
         ('alarm', 'A5@alarm E5 A5 E5 A5 E5 -', 0, 3, 6),
