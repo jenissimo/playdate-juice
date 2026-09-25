@@ -35,7 +35,8 @@ A.eq(#C.parseNames(blob .. trailer({})), 0, "an empty list is empty")
 -- --------------------------------------------------------------- masks
 A.eq(C.mask({ "pu1", "noi" }), 9, "names -> bits")
 A.eq(C.mask({ 3 }), 4, "channel 3 is the wave channel")
-A.eq(C.mask(0x1F), 15, "a mask passes through, clipped to 4 channels")
+A.eq(C.mask(0x1FF), 255, "a mask passes through, clipped to 8 voices")
+A.eq(C.mask({ 5, 8 }), 0x90, "format 2's voices 5-8 by number")
 A.eq(C.mask({}), 0, "nothing muted")
 A.falsy(pcall(C.mask, { "bass" }), "an unknown channel is an error, not silence")
 

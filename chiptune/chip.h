@@ -29,7 +29,8 @@ typedef struct {
 #define CHIP_QUEUE 64
 
 typedef struct {
-    GbApu apu;
+    GbApu apu;                      /* format 1: the exact DMG */
+    Vox vox;                        /* format 2 (and anything mixed with it) */
     Gbm gbm;
     int32_t tick_cd, timer_cd;
     ChipCmd queue[CHIP_QUEUE];

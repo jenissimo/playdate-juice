@@ -70,10 +70,20 @@ static void command(Gbm *g, GbmChan *c, uint8_t cmd, uint8_t val, uint8_t *mode)
 static void enter_order(Gbm *g, uint8_t order);
 static void rows4(Gbm *g);
 
+/* What a channel sounds like. Format 1 fixes it by hardware channel; format
+   2 by instrument (and table, and command). */
+static const GbmBank *bank_of(const Gbm *g, const GbmChan *c) { return &g->banks[c->bank ? 1 : 0]; }
+static uint8_t osc_of(const Gbm *g, const GbmChan *c)
+{
+    if (bank_of(g, c)->version >= 2) return c->osc;
+    return c->hw == 3 ? OSC_NOISE : c->hw == 2 ? OSC_WAVE : OSC_PULSE;
+}
+
 /* ─── registers ────────────────────────────────────────────────────────── */
 
 static void silence_hw(Gbm *g, uint8_t hw)
 {
+    if (g->v2) { if (g->vox) vox_off(g->vox, hw); return; }
     switch (hw) {
     case 0: W(g, NR12, 0); W(g, NR14, 0x80); break;
     case 1: W(g, NR22, 0); W(g, NR24, 0x80); break;
@@ -86,22 +96,27 @@ static void silence_hw(Gbm *g, uint8_t hw)
 static void set_pan(Gbm *g)
 {
     uint8_t v = 0, n;
+    if (g->v2) {
+        for (n = 0; n < GBM_VOICES; n++) {
+            uint8_t o = g->owner[n];
+            if (g->vox) vox_pan(g->vox, n, o == NO_OWNER ? g->ch[n].pan : g->ch[o].pan);
+        }
+        return;
+    }
     for (n = 0; n < 4; n++) {
         uint8_t o = g->owner[n];
-        uint8_t pan = o == NO_OWNER ? g->ch[n].pan : o == 4 ? g->ch[4].pan : g->ch[5].pan;
+        uint8_t pan = o == NO_OWNER ? g->ch[n].pan : g->ch[o].pan;
         if (pan & 1) v |= 1 << n;           /* bit 0: right */
         if (pan & 2) v |= 1 << (n + 4);     /* bit 1: left */
     }
     if (v != g->nr51) { g->nr51 = v; W(g, NR51, v); }
 }
 
-static const GbmBank *bank_of(const Gbm *g, const GbmChan *c) { return &g->banks[c->bank ? 1 : 0]; }
-
 /* The envelope, less the duck level on a music channel. */
 static uint8_t duck_env(const Gbm *g, const GbmChan *c)
 {
     int v;
-    if (!g->duck_level || c->bank) return c->env;
+    if (g->v2 || !g->duck_level || c->bank) return c->env;   /* vox ducks by itself */
     v = (c->env >> 4) - g->duck_level;
     if (v < 0) v = 0;
     return (uint8_t)((v << 4) | (c->env & 0x0F));
@@ -230,6 +245,38 @@ static void w_noi(Gbm *g, GbmChan *c, uint8_t e, uint16_t v)
     W(g, NR43, (uint8_t)v);
 }
 
+/* Format 2 (and anything on vox): the same trigger bits, to the synth.
+   Bit 0 restarts, bit 1 is a new width or wave, bit 2 a new oscillator. */
+static const uint8_t V1_WIDTH[4] = {32, 64, 128, 192};
+static const uint8_t V1_WAVE_VOL[4] = {0, 4, 8, 15};
+
+static void w_vox(Gbm *g, GbmChan *c, uint8_t e, uint16_t v)
+{
+    Vox *x = g->vox;
+    const GbmBank *k = bank_of(g, c);
+    uint8_t osc = osc_of(g, c), v1 = k->version < 2, i = c->hw;
+    if (!x) return;
+    if (e) {
+        if (osc == OSC_PULSE) vox_width(x, i, v1 ? V1_WIDTH[c->duty & 3] : c->duty);
+        else if (osc == OSC_WAVE) vox_wave(x, i, k->wave + (uint16_t)(c->duty << 4));
+        vox_flags(x, i, v1 ? 0 : c->xflags);
+    }
+    if (e & 1) {
+        uint8_t env = c->env;
+        if (v1 && osc == OSC_WAVE) env = (uint8_t)(V1_WAVE_VOL[env & 3] << 4);
+        if (osc == OSC_SAMPLE && c->sample) {
+            const uint8_t *tab = k->base + U16(k->base + 22);
+            const uint8_t *smp = k->base + U16(tab + (c->sample - 1) * 2);
+            vox_sample(x, i, smp + 2, U16(smp));
+        }
+        vox_sweep(x, i, osc == OSC_PULSE ? c->sweep : 0);
+        vox_trigger(x, i, osc, v, env);
+        return;
+    }
+    if (e & 4) vox_osc(x, i, osc);
+    vox_pitch(x, i, v);
+}
+
 /* ─── notes ────────────────────────────────────────────────────────────── */
 
 /* Flag a sounding channel for output this frame. */
@@ -241,6 +288,17 @@ static void note_on(Gbm *g, GbmChan *c, uint8_t note, uint8_t mode)
 {
     const uint8_t *rec = c->insp;
     uint16_t tbl;
+    uint8_t tspeed;
+    if (bank_of(g, c)->version >= 2) {
+        /* osc, then the format-1 record (duty, vib, vib delay, env, sweep,
+           length, table, t_speed), then sample+1, pwm, flags */
+        c->osc = rec[0] < OSC_COUNT ? rec[0] : OSC_PULSE;
+        c->sample = rec[10];
+        c->pwm = (int8_t)rec[11];
+        c->xflags = rec[12];
+        rec++;
+    }
+    tspeed = rec[8];
     c->trig = 1;
     c->flags = (uint8_t)((c->flags & F_ARP) | F_ON | F_DIRTY);
     c->note = note;
@@ -260,7 +318,7 @@ static void note_on(Gbm *g, GbmChan *c, uint8_t note, uint8_t mode)
     if (tbl) {
         c->t = bank_of(g, c)->base + tbl;
         c->t_pos = 0;
-        c->t_speed = rec[8];
+        c->t_speed = tspeed;
         c->t_n = 0;
         c->flags |= F_TABLE;
     }
@@ -268,19 +326,19 @@ static void note_on(Gbm *g, GbmChan *c, uint8_t note, uint8_t mode)
 }
 
 /* A note's period on this channel (the wave channel sounds an octave down). */
-static uint16_t period_of(const GbmChan *c, uint8_t n)
+static uint16_t period_of(const Gbm *g, const GbmChan *c, uint8_t n)
 {
-    if (c->hw == 2) n = (uint8_t)(n + 12);
+    if (osc_of(g, c) == OSC_WAVE) n = (uint8_t)(n + 12);
     if (n >= NOTE_COUNT) n = NOTE_COUNT - 1;
     return PERIODS[n];
 }
 
 /* Portamento: keep sounding and bend from the current pitch to `note`. */
-static void porta_to(GbmChan *c, uint8_t note)
+static void porta_to(Gbm *g, GbmChan *c, uint8_t note)
 {
-    uint16_t now = (uint16_t)(period_of(c, c->note) + c->bend);
+    uint16_t now = (uint16_t)(period_of(g, c, c->note) + c->bend);
     c->note = note;
-    c->bend = (uint16_t)(now - period_of(c, note));
+    c->bend = (uint16_t)(now - period_of(g, c, note));
     c->mode |= 2;
     c->flags |= F_BEND;
 }
@@ -297,7 +355,7 @@ static void note_off(Gbm *g, GbmChan *c)
 static void set_inst(Gbm *g, GbmChan *c, uint8_t i)
 {
     c->inst = i;
-    c->insp = bank_of(g, c)->ins + i * 10;
+    c->insp = bank_of(g, c)->ins + i * bank_of(g, c)->rec;
 }
 
 /* One row of one stream: [instrument] [command...] then a note, 0x60 note
@@ -316,9 +374,11 @@ static uint8_t row(Gbm *g, GbmChan *c)
             if (c->inst != i) set_inst(g, c, i);
             a = *p++;
         }
-        while ((a & 0xF0) == 0xE0) {
+        while ((a & 0xF0) == 0xE0 || a == 0xF1) {
+            /* 0xF1 cmd val: format 2's extended commands (0x10 and up) */
+            uint8_t cmd = a == 0xF1 ? *p++ : (uint8_t)(a & 0x0F);
             uint8_t val = *p++;
-            command(g, c, a & 0x0F, val, &mode);
+            command(g, c, cmd, val, &mode);
             mode |= 0x80;               /* the row did something */
             a = *p++;
         }
@@ -331,7 +391,7 @@ static uint8_t row(Gbm *g, GbmChan *c)
         return (mode & 0x80) ? 2 : 1;
     }
     a = (uint8_t)(a + c->transpose);
-    if ((mode & M_PORTA) && (c->flags & F_ON)) { porta_to(c, a); return 2; }
+    if ((mode & M_PORTA) && (c->flags & F_ON)) { porta_to(g, c, a); return 2; }
     if (mode & M_DELAY) {               /* frame_ch starts it later */
         c->dnote = a;
         c->note = 0xFF;
@@ -374,7 +434,8 @@ static void command(Gbm *g, GbmChan *c, uint8_t cmd, uint8_t val, uint8_t *mode)
     case 0x5: c->env = val; restart(c); m = M_ENV; break;
     case 0x6:                                   /* duty / wave / noise mode */
         c->duty = val;
-        if (c->hw == 2) restart(c);             /* a new wave needs a restart */
+        /* a new wave needs a restart on the DMG; vox swaps it live */
+        if (osc_of(g, c) == OSC_WAVE && !g->v2) restart(c);
         else { c->trig |= 2; mark(c); }
         m = M_DUTY;
         break;
@@ -399,6 +460,22 @@ static void command(Gbm *g, GbmChan *c, uint8_t cmd, uint8_t val, uint8_t *mode)
             g->groove_pos = 0;
         }
         break;
+    default:                                    /* format 2 */
+        if (g->v2 && g->vox) {
+            Vox *x = g->vox;
+            switch (cmd) {
+            case 0x10: vox_filter(x, val, x->resonance, x->mode); break;
+            case 0x11: vox_filter(x, x->cutoff, (uint8_t)(val >> 4), (uint8_t)(val & 7)); break;
+            case 0x12: vox_cutoff_slide(x, (int8_t)val); break;
+            case 0x13: c->xflags = (uint8_t)(val ? c->xflags | VOX_FILTER : c->xflags & ~VOX_FILTER); c->trig |= 2; mark(c); break;
+            case 0x14: c->duty = val; c->trig |= 2; mark(c); m = M_DUTY; break;
+            case 0x15: c->pwm = (int8_t)val; break;
+            case 0x16: if (val < OSC_COUNT && val != c->osc) { c->osc = val; c->trig |= 4; mark(c); } break;
+            case 0x17: c->xflags = (uint8_t)(val ? c->xflags | VOX_RING : c->xflags & ~VOX_RING); c->trig |= 2; mark(c); break;
+            case 0x18: c->xflags = (uint8_t)(val ? c->xflags | VOX_SYNC : c->xflags & ~VOX_SYNC); c->trig |= 2; mark(c); break;
+            }
+        }
+        break;
     }
     *mode = (uint8_t)(*mode | m);
 }
@@ -412,12 +489,18 @@ static int table_step(Gbm *g, GbmChan *c)
     const uint8_t *r;
     uint8_t cmd, val, dummy = 0;
     if (c->t_n) { c->t_n--; return 1; }
-    r = c->t + 2 + c->t_pos * 6;
+    r = c->t + 2 + c->t_pos * bank_of(g, c)->trow;
     c->t_tr = (int8_t)r[0];
     if (r[1] != 0xFF) { c->env = r[1]; restart(c); }
+    /* format 2's seventh column switches the oscillator: the SID drum trick,
+       a frame of noise, then a pitch falling on a triangle */
+    if (bank_of(g, c)->trow > 6 && r[6] < OSC_COUNT && r[6] != c->osc) {
+        c->osc = r[6];
+        c->trig |= 4;
+    }
     if (r[2] != 0xFF && c->duty != r[2]) {
         c->duty = r[2];
-        if (c->hw == 2) restart(c);
+        if (osc_of(g, c) == OSC_WAVE && !g->v2) restart(c);
         else c->trig |= 2;
     }
     c->t_pitch = (int8_t)r[3];
@@ -453,7 +536,7 @@ static void bend_step(GbmChan *c)
    changed. */
 static void frame_ch(Gbm *g, GbmChan *c)
 {
-    uint8_t trig, block, n;
+    uint8_t trig, block, n, osc;
     uint16_t v;
     if (c->flags & F_COUNT) {
         if (c->delay) {
@@ -487,11 +570,12 @@ static void frame_ch(Gbm *g, GbmChan *c)
         if (ph == 2) n = (uint8_t)(n + (c->arp >> 4));
         else if (ph == 0) n = (uint8_t)(n + (c->arp & 0x0F));
     }
-    if (c->hw == 3) {
+    osc = osc_of(g, c);
+    if (osc == OSC_NOISE) {
         if (n >= NOISE_COUNT) n = (n & 0x80) ? 0 : NOISE_COUNT - 1;
         v = NOISE[n] | (c->duty & 8);
     } else {
-        if (c->hw == 2) n = (uint8_t)(n + 12);
+        if (osc == OSC_WAVE) n = (uint8_t)(n + 12);
         if (n >= NOTE_COUNT) n = (n & 0x80) ? 0 : NOTE_COUNT - 1;
         v = (uint16_t)(PERIODS[n] + c->bend + c->t_pitch);
         if (c->vib) {
@@ -509,6 +593,7 @@ static void frame_ch(Gbm *g, GbmChan *c)
     }
     c->out = v;
     if (block) return;
+    if (g->v2) { w_vox(g, c, trig, v); return; }
     switch (c->hw) {
     case 0: w_pu(g, c, trig, v, 0); break;
     case 1: w_pu(g, c, trig, v, 1); break;
@@ -528,7 +613,7 @@ static void row_held(Gbm *g, GbmChan *c)
 static void rows4(Gbm *g)
 {
     int i;
-    for (i = 0; i < 4; i++) row_held(g, &g->ch[i]);
+    for (i = 0; i < g->nv; i++) row_held(g, &g->ch[i]);
 }
 
 static void enter_order(Gbm *g, uint8_t order)
@@ -542,12 +627,12 @@ static void enter_order(Gbm *g, uint8_t order)
     }
     g->porder = order;
     g->prow = 0;
-    o = g->orders + order * 8;
-    for (i = 0; i < 4; i++) {
+    o = g->orders + order * 2 * g->nv;
+    for (i = 0; i < g->nv; i++) {
         GbmChan *c = &g->ch[i];
         c->p = g->banks[0].base + U16(g->patdir[i] + o[i] * 2);
         c->wait = 0;
-        c->transpose = o[4 + i];
+        c->transpose = o[g->nv + i];
     }
 }
 
@@ -596,7 +681,7 @@ static void parse_ahead(Gbm *g)
 static void release_held(Gbm *g)
 {
     int i;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < g->nv; i++) {
         GbmChan *c = &g->ch[i];
         if (!(c->flags & F_HOLD)) continue;
         c->flags &= ~F_HOLD;
@@ -619,7 +704,7 @@ static void sfx_end(Gbm *g, uint8_t slot)
     block = (g->muted >> hw) & 1;
     if (hw == 2) { g->wave_ptr = NULL; block |= g->pcm_active; }
     m->block = block;
-    if (hw == 0) W(g, NR10, 0);            /* PU1: the effect's sweep goes */
+    if (hw == 0 && !g->v2) W(g, NR10, 0);  /* PU1: the effect's sweep goes */
     m->out = 0xFFFF;
     restart(m);
     if (!(m->flags & F_ON)) silence_hw(g, hw);
@@ -627,6 +712,19 @@ static void sfx_end(Gbm *g, uint8_t slot)
 }
 
 /* An SFX slot's frame: its own row clock, then the channel. */
+/* Format 2's pulse-width modulation: the width walks by `pwm` a frame and
+   bounces between 16 and 240, as SID tunes sweep it. */
+static void pwm_step(Gbm *g, GbmChan *c)
+{
+    int w;
+    if (!c->pwm || !(c->flags & F_ON) || c->block || osc_of(g, c) != OSC_PULSE) return;
+    w = c->duty + c->pwm;
+    if (w < 16) { w = 16; c->pwm = (int8_t)-c->pwm; }
+    if (w > 240) { w = 240; c->pwm = (int8_t)-c->pwm; }
+    c->duty = (uint8_t)w;
+    vox_width(g->vox, c->hw, c->duty);
+}
+
 static void sfx_slot(Gbm *g, uint8_t slot)
 {
     GbmChan *c = &g->ch[slot];
@@ -636,6 +734,7 @@ static void sfx_slot(Gbm *g, uint8_t slot)
         if (!row(g, c)) { sfx_end(g, slot); return; }
     }
     if (c->flags & F_WORK) frame_ch(g, c);
+    if (g->v2 && g->vox && bank_of(g, c)->version >= 2) pwm_step(g, c);
 }
 
 static void duck_step(Gbm *g)
@@ -647,8 +746,9 @@ static void duck_step(Gbm *g)
     g->duck_n = g->duck_speed;
     if (g->duck_level < target) g->duck_level++;
     else g->duck_level--;
-    /* pulse and noise pick the level up at their next note; CH3 now */
-    if (c->block || !(c->flags & F_ON)) return;
+    /* pulse and noise pick the level up at their next note; CH3 now (on
+       vox every voice follows at once: see gbm_tick) */
+    if (g->v2 || c->block || !(c->flags & F_ON)) return;
     W(g, NR32, wave_level(g, c, c->env));
 }
 
@@ -686,14 +786,21 @@ void gbm_tick(Gbm *g)
         } else if (n == 1) parse_ahead(g);
         else if (n == 2) { if (g->pending) pending_order(g); }
         if (channels)
-            for (i = 0; i < 4; i++) {
+            for (i = 0; i < g->nv; i++) {
                 GbmChan *c = &g->ch[i];
                 if (!(c->flags & F_HOLD) && (c->flags & F_WORK)) frame_ch(g, c);
+                if (g->v2 && g->vox && bank_of(g, c)->version >= 2) pwm_step(g, c);
             }
     }
-    for (i = 4; i < 6; i++) if (g->ch[i].prio) sfx_slot(g, (uint8_t)i);
+    for (i = GBM_SLOT0; i <= GBM_SLOT1; i++) if (g->ch[i].prio) sfx_slot(g, (uint8_t)i);
     if (g->duck_amount) duck_step(g);
     if (g->pcm_done) pcm_end(g);
+    if (g->v2 && g->vox) {
+        /* vox ducks every music voice continuously, not at its next note */
+        for (i = 0; i < GBM_VOICES; i++)
+            vox_duck(g->vox, i, (uint8_t)(i < g->nv && g->owner[i] == NO_OWNER ? g->duck_level : 0));
+        vox_frame(g->vox);
+    }
 }
 
 /* ─── the rarely called API (gameboy-lab gbm.c) ────────────────────────── */
@@ -713,6 +820,23 @@ static void bind(Gbm *g, int b, const uint8_t *blob)
     k->ins = blob + U16(blob + 12);
     k->tbl = blob + U16(blob + 14);
     k->wave = blob + U16(blob + 16);
+    k->version = blob[2];
+    k->rec = blob[2] >= 2 ? 16 : 10;
+    k->trow = blob[2] >= 2 ? 7 : 6;
+}
+
+/* Which synth plays: gbapu while everything loaded is format 1 (and exact),
+   vox as soon as anything is format 2. A switch silences the one left. */
+static void choose_backend(Gbm *g)
+{
+    uint8_t v2 = (g->banks[0].base && g->banks[0].version >= 2) || (g->banks[1].base && g->banks[1].version >= 2);
+    int i;
+    if (!g->vox) v2 = 0;
+    if (v2 == g->v2) return;
+    for (i = 0; i < 4; i++) silence_hw(g, (uint8_t)i);
+    if (g->vox) for (i = 0; i < GBM_VOICES; i++) vox_off(g->vox, i);
+    g->v2 = v2;
+    for (i = 0; i < GBM_VOICES + 2; i++) g->ch[i].out = 0xFFFF;
 }
 
 /* A hardware channel coming back to the music: the next frame retriggers
@@ -724,7 +848,7 @@ static void release_hw(Gbm *g, uint8_t hw)
     update_block(g, hw);
     dirty(c);
     if (hw == 2) g->wave_ptr = NULL;
-    if (hw == 0) W(g, NR10, 0);
+    if (hw == 0 && !g->v2) W(g, NR10, 0);
     if (!(c->flags & F_ON)) silence_hw(g, hw);
     set_pan(g);
 }
@@ -743,28 +867,31 @@ static void pcm_stop(Gbm *g)
 {
     g->timer_irq = 0;
     g->pcm_left = 0;
-    if (g->pcm_active) { W(g, NR30, 0); pcm_release(g); }
+    if (g->pcm_active) { if (!g->v2) W(g, NR30, 0); pcm_release(g); }
 }
 
 void gbm_pcm_timer(Gbm *g) { g->pcm_timer_on = 1; }
 
-void gbm_init(Gbm *g, GbApu *apu)
+void gbm_init(Gbm *g, GbApu *apu, Vox *vox)
 {
     int i;
     for (i = 0; i < (int)sizeof *g; i++) ((uint8_t *)g)[i] = 0;
     g->apu = apu;
+    g->vox = vox;
+    g->nv = 4;
     g->hold = 0xFF;
     W(g, NR52, 0x80);
     W(g, NR50, 0x77);
     W(g, NR51, g->nr51 = 0xFF);
     W(g, NR10, 0);
-    for (i = 0; i < 6; i++) {
+    for (i = 0; i < GBM_VOICES + 2; i++) {
         GbmChan *c = &g->ch[i];
-        c->hw = (uint8_t)(i < 4 ? i : 0);
+        c->hw = (uint8_t)(i < GBM_VOICES ? i : 0);
         c->pan = 3;
-        c->bank = (uint8_t)(i < 4 ? 0 : 1);
+        c->bank = (uint8_t)(i < GBM_VOICES ? 0 : 1);
     }
-    for (i = 0; i < 4; i++) { g->owner[i] = NO_OWNER; silence_hw(g, (uint8_t)i); }
+    for (i = 0; i < GBM_VOICES; i++) g->owner[i] = NO_OWNER;
+    for (i = 0; i < 4; i++) silence_hw(g, (uint8_t)i);
 }
 
 void gbm_play(Gbm *g, const uint8_t *s)
@@ -773,12 +900,19 @@ void gbm_play(Gbm *g, const uint8_t *s)
     g->playing = 0;
     g->paused = 0;
     bind(g, 0, s);
+    choose_backend(g);
+    g->nv = s[2] >= 2 ? (uint8_t)(s[7] < 1 ? 1 : s[7] > GBM_VOICES ? GBM_VOICES : s[7]) : 4;
+    if (g->v2) vox_voices(g->vox, g->nv);
     g->rows = s[3];
     g->order_count = s[4];
     g->loop_order = s[5];
     g->orders = s + U16(s + 8);
-    for (i = 0; i < 4; i++) g->patdir[i] = s + U16(s + U16(s + 10) + i * 2);
+    for (i = 0; i < g->nv; i++) g->patdir[i] = s + U16(s + U16(s + 10) + i * 2);
     g->groovetab = s + U16(s + 18);
+    if (g->v2 && s[2] >= 2) {
+        vox_filter(g->vox, s[24], (uint8_t)(s[25] >> 4), (uint8_t)(s[25] & 7));
+        vox_cutoff_slide(g->vox, 0);
+    }
     gbm_seek(g, 0, 0);
 }
 
@@ -788,11 +922,12 @@ void gbm_seek(Gbm *g, uint8_t order, uint8_t r)
     if (!g->banks[0].base) return;
     g->playing = 0;
     pcm_stop(g);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < GBM_VOICES; i++) {
         GbmChan *c = &g->ch[i];
         c->flags = 0; c->inst = 0; c->insp = g->banks[0].ins; c->arp = 0; c->retrig = 0;
         c->cut = 0; c->delay = 0; c->pan = 3; c->out = 0xFFFF; c->mode = 0; c->bend = 0;
-        if (g->owner[i] == NO_OWNER) silence_hw(g, (uint8_t)i);
+        if (i < 4 && g->owner[i] == NO_OWNER) silence_hw(g, (uint8_t)i);
+        else if (i >= 4 && g->v2 && g->owner[i] == NO_OWNER) silence_hw(g, (uint8_t)i);
     }
     g->wave_ptr = NULL;
     set_pan(g);
@@ -806,7 +941,7 @@ void gbm_seek(Gbm *g, uint8_t order, uint8_t r)
     while (g->playing && g->prow < r) { rows4(g); g->prow++; }
     g->order = g->porder;
     g->row = g->prow;
-    for (i = 0; i < 4; i++) dirty(&g->ch[i]);
+    for (i = 0; i < g->nv; i++) dirty(&g->ch[i]);
     g->tick_n = 1;
 }
 
@@ -815,9 +950,9 @@ void gbm_stop(Gbm *g)
     int i;
     g->playing = 0;
     pcm_stop(g);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < GBM_VOICES; i++) {
         g->ch[i].flags = 0;
-        if (g->owner[i] == NO_OWNER) silence_hw(g, (uint8_t)i);
+        if (g->owner[i] == NO_OWNER && (i < 4 || g->v2)) silence_hw(g, (uint8_t)i);
     }
 }
 
@@ -825,14 +960,21 @@ void gbm_pause(Gbm *g, uint8_t p)
 {
     int i;
     g->paused = p;
-    if (p) { pcm_stop(g); for (i = 0; i < 4; i++) silence_hw(g, (uint8_t)i); }
-    else { for (i = 0; i < 6; i++) dirty(&g->ch[i]); g->wave_ptr = NULL; }
+    if (p) {
+        pcm_stop(g);
+        for (i = 0; i < (g->v2 ? GBM_VOICES : 4); i++) silence_hw(g, (uint8_t)i);
+    } else {
+        for (i = 0; i < GBM_VOICES + 2; i++) dirty(&g->ch[i]);
+        g->wave_ptr = NULL;
+    }
 }
 
 void gbm_sfx_bank(Gbm *g, const uint8_t *b)
 {
     bind(g, 1, b);
-    g->patdir[4] = b + U16(b + U16(b + 10) + 8);
+    choose_backend(g);
+    /* the SFX directory follows the bank's own channel directories */
+    g->sfxdir = b + U16(b + U16(b + 10) + (b[2] >= 2 ? b[7] : 4) * 2);
 }
 
 uint8_t gbm_sfx(Gbm *g, uint8_t id)
@@ -842,19 +984,21 @@ uint8_t gbm_sfx(Gbm *g, uint8_t id)
     GbmChan *c;
     if (!b || id >= b[6]) return 0;
     e = b + U16(b + 20) + id * 4;
-    pat = e[0]; hw = e[1] & 3; prio = e[2] ? e[2] : 1; speed = e[3] ? e[3] : 1;
+    /* format 2 may put an effect on any of 8 voices -- one the song does
+       not use takes nothing from the music */
+    pat = e[0]; hw = (uint8_t)(e[1] & (g->v2 ? 7 : 3)); prio = e[2] ? e[2] : 1; speed = e[3] ? e[3] : 1;
     /* The slot already on this channel if any, else a free one, else the
        weaker of the two. */
     if (g->owner[hw] != NO_OWNER) slot = g->owner[hw];
-    else if (!g->ch[4].prio) slot = 4;
-    else if (!g->ch[5].prio) slot = 5;
-    else slot = g->ch[4].prio <= g->ch[5].prio ? 4 : 5;
+    else if (!g->ch[GBM_SLOT0].prio) slot = GBM_SLOT0;
+    else if (!g->ch[GBM_SLOT1].prio) slot = GBM_SLOT1;
+    else slot = g->ch[GBM_SLOT0].prio <= g->ch[GBM_SLOT1].prio ? GBM_SLOT0 : GBM_SLOT1;
     c = &g->ch[slot];
     if (c->prio > prio) return 0;
     if (hw == 2) pcm_stop(g);
     if (c->prio && c->hw != hw) release_hw(g, c->hw);
     c->hw = hw; c->prio = prio; c->speed = speed; c->speed_n = 1;
-    c->p = b + U16(g->patdir[4] + pat * 2); c->wait = 0; c->transpose = 0;
+    c->p = b + U16(g->sfxdir + pat * 2); c->wait = 0; c->transpose = 0;
     c->flags = 0; c->inst = 0; c->insp = g->banks[1].ins; c->arp = 0; c->retrig = 0; c->cut = 0;
     c->delay = 0; c->mode = 0; c->bend = 0; c->pan = 3; c->out = 0xFFFF;
     g->owner[hw] = slot;
@@ -867,7 +1011,7 @@ uint8_t gbm_sfx(Gbm *g, uint8_t id)
 void gbm_sfx_stop(Gbm *g)
 {
     uint8_t i;
-    for (i = 4; i < 6; i++) if (g->ch[i].prio) sfx_end(g, i);
+    for (i = GBM_SLOT0; i <= GBM_SLOT1; i++) if (g->ch[i].prio) sfx_end(g, i);
 }
 
 void gbm_duck(Gbm *g, uint8_t amount, uint8_t speed)
@@ -880,16 +1024,21 @@ void gbm_duck(Gbm *g, uint8_t amount, uint8_t speed)
 
 void gbm_mute(Gbm *g, uint8_t mask)
 {
-    uint8_t i, bit;
-    for (i = 0, bit = 1; i < 4; i++, bit <<= 1) {
+    uint8_t i, n = g->v2 ? GBM_VOICES : 4;
+    uint16_t bit;
+    for (i = 0, bit = 1; i < n; i++, bit <<= 1) {
         if ((mask & bit) && !(g->muted & bit) && g->owner[i] == NO_OWNER) silence_hw(g, i);
         else if (!(mask & bit) && (g->muted & bit)) { dirty(&g->ch[i]); if (i == 2) g->wave_ptr = NULL; }
     }
     g->muted = mask;
-    for (i = 0; i < 4; i++) update_block(g, i);
+    for (i = 0; i < n; i++) update_block(g, i);
 }
 
-void gbm_volume(Gbm *g, uint8_t level) { W(g, NR50, (uint8_t)((level & 7) * 0x11)); }
+void gbm_volume(Gbm *g, uint8_t level)
+{
+    if (g->vox) vox_master(g->vox, level);
+    W(g, NR50, (uint8_t)((level & 7) * 0x11));
+}
 
 /* ─── blob checks ──────────────────────────────────────────────────────── */
 
@@ -898,13 +1047,15 @@ void gbm_volume(Gbm *g, uint8_t level) { W(g, NR50, (uint8_t)((level & 7) * 0x11
    from the encoder always ends each one. */
 int gbm_check(const uint8_t *s, uint32_t len)
 {
-    uint32_t i, dir;
-    if (len < 24 || s[0] != 'G' || s[1] != 'B' || s[2] != 1) return 1;
+    uint32_t i, dir, nv;
+    if (len < 24 || s[0] != 'G' || s[1] != 'B' || s[2] < 1 || s[2] > 2) return 1;
+    if (s[2] >= 2 && (len < 26 || s[7] < 1 || s[7] > GBM_VOICES)) return 1;
+    nv = s[2] >= 2 ? s[7] : 4;
     for (i = 8; i < 24; i += 2) if ((uint32_t)U16(s + i) > len) return 2;
-    if (U16(s + 8) + (uint32_t)s[4] * 8 > len) return 3;
+    if (U16(s + 8) + (uint32_t)s[4] * 2 * nv > len) return 3;
     dir = U16(s + 10);
-    if (dir + 10 > len) return 4;
-    for (i = 0; i < 5; i++) if ((uint32_t)U16(s + dir + i * 2) >= len) return 4;
+    if (dir + (nv + 1) * 2 > len) return 4;
+    for (i = 0; i <= nv; i++) if ((uint32_t)U16(s + dir + i * 2) >= len) return 4;
     if ((uint32_t)U16(s + 18) + 2 > len || (uint32_t)U16(s + U16(s + 18)) + 2 > len) return 5;
     if (U16(s + 20) + (uint32_t)s[6] * 4 > len) return 6;
     return 0;

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "../chiptune/chip.h"
 
 static uint8_t *slurp(const char *path, long *len)
@@ -117,7 +118,9 @@ static void write_wav(const char *path, const int16_t *pcm, uint32_t frames, int
 int main(int argc, char **argv)
 {
     const char *in = NULL, *out = NULL;
-    int loops = 1, sfx = -1, mono = 0, adpcm = 0, from = 0, mute = 0, i;
+    int loops = 1, sfx = -1, mono = 0, adpcm = 0, from = 0, mute = 0, bench = 0, i;
+    const char *with = NULL;
+    uint8_t *bank = NULL;
     double seconds = 0;
     uint32_t rate = 44100, cap, n = 0;
     long len;
@@ -132,6 +135,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mute") && i + 1 < argc) mute = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mono")) mono = 1;
+        else if (!strcmp(argv[i], "--bench")) bench = 1;
+        else if (!strcmp(argv[i], "--with") && i + 1 < argc) with = argv[++i];
         else if (!strcmp(argv[i], "--adpcm")) adpcm = 1;
         else if (!in) in = argv[i];
         else if (!out) out = argv[i];
@@ -142,6 +147,13 @@ int main(int argc, char **argv)
     }
     if (!(blob = slurp(in, &len)) || gbm_check(blob, (uint32_t)len)) { fprintf(stderr, "%s: not a GBM blob\n", in); return 1; }
     chip_init(&chip, rate);
+    /* --with BANK: load an SFX bank first, as a game would -- a format-2
+       bank moves a format-1 song onto vox, and this hears it there. */
+    if (with) {
+        long blen;
+        if (!(bank = slurp(with, &blen)) || gbm_check(bank, (uint32_t)blen)) { fprintf(stderr, "%s: not a GBM blob\n", with); return 1; }
+        chip_post(&chip, CHIP_SFX_BANK, 0, 0, bank);
+    }
     if (sfx >= 0) {
         if (sfx >= blob[6]) { fprintf(stderr, "%s has %d effects\n", in, blob[6]); return 1; }
         chip_post(&chip, CHIP_SFX_BANK, 0, 0, blob);
@@ -150,6 +162,20 @@ int main(int argc, char **argv)
         if (!blob[4]) { fprintf(stderr, "%s has no song, only effects: use --sfx\n", in); return 1; }
         chip_post(&chip, CHIP_PLAY, (uint8_t)from, 0, blob);
         if (mute) chip_post(&chip, CHIP_MUTE, (uint8_t)mute, 0, NULL);
+    }
+    if (bench) {
+        /* The cost of the callback: 60 s of song in 256-sample buffers, as the
+           Playdate asks for them, timed; nothing written. */
+        static int16_t bl[256], br[256];
+        uint32_t k, total = rate * 60;
+        clock_t t0 = clock();
+        for (k = 0; k < total; k += 256) chip_render(&chip, bl, br, 256);
+        {
+            double s = (double)(clock() - t0) / CLOCKS_PER_SEC;
+            printf("%s: %s, %.1f ns a sample, %.0fx real time on this machine\n", in,
+                   chip.gbm.v2 ? "vox" : "gbapu", s * 1e9 / total, 60.0 / s);
+        }
+        return 0;
     }
     cap = (uint32_t)(rate * (seconds > 0 ? seconds : 600));
     l = malloc(cap * sizeof *l); r = malloc(cap * sizeof *r);

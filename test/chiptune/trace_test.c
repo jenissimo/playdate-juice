@@ -135,7 +135,7 @@ static int run(const char *dir, const char *name)
     mine.n = 0; timer.n = 0; cur_block = 0;
     cur_frame = 0; in_isr = 0; ti_used = 0;
     gbapu_init(&apu, 44100);
-    gbm_init(&g, &apu);
+    gbm_init(&g, &apu, NULL);
     gbm_duck(&g, (uint8_t)duck_a, (uint8_t)duck_s);
     gbm_sfx_bank(&g, sfx);
     gbm_pcm_timer(&g);

@@ -38,15 +38,18 @@ SfxKit.define("tick", { prio = 3, notes = {
     { group = "sq", hz = 900, vol = 0.15, len = 0.03, adsr = { 0.001, 0.03, 0, 0.01 } },
 } })
 
+-- Each song shows a style and a set of chiptune techniques (GB: the four
+-- Game Boy channels exactly; v2: the extended format's voices).
 local SONGS = {
-    { id = "cloud_garden",  title = "Cloud Garden",  style = "Main menu - airy, 90 BPM" },
-    { id = "tidal_twang",   title = "Tidal Twang",   style = "Surf rock - tremolo, 179 BPM" },
-    { id = "jungle_pulse",  title = "Jungle Pulse",  style = "Drum & bass - 170 BPM" },
-    { id = "crimson_clash", title = "Crimson Clash", style = "JRPG battle - 163 BPM" },
-    { id = "willow_lane",   title = "Willow Lane",   style = "Village waltz - 3/4" },
-    { id = "hollow_deep",   title = "Hollow Deep",   style = "Dungeon - ambient" },
-    { id = "victory",       title = "Victory",       style = "Fanfare - ends" },
-    { id = "fade_out",      title = "Fade Out",      style = "Game over - ends" },
+    { id = "cloud_garden",  title = "Cloud Garden",  style = "Menu - PWM pad, filter, echo", tag = "v2 6ch" },
+    { id = "tidal_twang",   title = "Tidal Twang",   style = "Surf - retrig tremolo, P-kick", tag = "GB" },
+    { id = "jungle_pulse",  title = "Jungle Pulse",  style = "DnB - sampled break, reese", tag = "v2 8ch" },
+    { id = "crimson_clash", title = "Crimson Clash", style = "Battle - sync lead, SID drums", tag = "v2 7ch" },
+    { id = "willow_lane",   title = "Willow Lane",   style = "Waltz - duty sweep, 3/4", tag = "GB" },
+    { id = "hollow_deep",   title = "Hollow Deep",   style = "Dungeon - ring mod bell, BP", tag = "v2 7ch" },
+    { id = "neon_acid",     title = "Neon Acid",     style = "Acid - 303 squelch, 808 kit", tag = "v2 6ch" },
+    { id = "victory",       title = "Victory",       style = "Fanfare - ends", tag = "v2 5ch" },
+    { id = "fade_out",      title = "Fade Out",      style = "Game over - ends", tag = "GB" },
 }
 local songPaths = {}
 for _, s in ipairs(SONGS) do songPaths[s.id] = "music/" .. s.id .. ".gbm" end
@@ -138,14 +141,17 @@ local function list(items, sel, x, y, w, rowH, visible, spring, label)
 end
 
 -- Four channel meters: the chiptune APU as it sounds right now.
-local meterPeak = { 0, 0, 0, 0 }
-local function meters(x, y, h, cursor, muted, step)
-    step = step or 30
-    local bw = min(22, step - 2)
+local meterPeak = { 0, 0, 0, 0, 0, 0, 0, 0 }
+-- Draws one meter per channel into `width` pixels: four for a Game Boy
+-- song, up to eight for a format-2 one. Returns how many there were.
+local function meters(x, y, h, cursor, muted, width)
     local lv = { Chiptune.levels() }
-    local names = step >= 30 and { "PU1", "PU2", "WAV", "NOI" } or { "P1", "P2", "W", "N" }
+    local n = max(4, #lv)
+    local step = floor((width or 120) / n)
+    local bw = min(22, step - 2)
+    local names = n == 4 and step >= 30 and { "PU1", "PU2", "WAV", "NOI" } or nil
     gfx.setFont(fontBold)
-    for c = 1, 4 do
+    for c = 1, n do
         local v = lv[c] or 0
         meterPeak[c] = max(v, meterPeak[c] - 0.5)
         local bx = x + (c - 1) * step
@@ -160,8 +166,9 @@ local function meters(x, y, h, cursor, muted, step)
             gfx.drawLine(bx + bw, y, bx, y + h)
         end
         if cursor == c then gfx.fillRect(bx, y + h + 16, bw, 2) end
-        gfx.drawText(names[c], bx, y + h + 3)
+        gfx.drawText(names and names[c] or tostring(c), bx, y + h + 3)
     end
+    return n
 end
 
 -- ─── scenes ────────────────────────────────────────────────────────────────
@@ -214,7 +221,7 @@ local EXHIBITS = {
     { id = "tween",       name = "Tween",             blurb = "31 easings, springs, sequences",      fx = "Slide" },
     { id = "impact",      name = "Shake & Particles", blurb = "Trauma shake, pooled 1-bit particles", fx = "Shatter" },
     { id = "sfxkit",      name = "SfxKit",            blurb = "Synth sound effects as data",         fx = "Blinds" },
-    { id = "music",       name = "Chiptune: Music",   blurb = "8 songs on a Game Boy tracker driver", fx = "Scanline" },
+    { id = "music",       name = "Chiptune: Music",   blurb = "9 songs: Game Boy and 8-voice SID-style", fx = "Scanline" },
     { id = "sfx",         name = "Chiptune: SFX",     blurb = "38 effects that duck the music",      fx = "Pixel Shift" },
     { id = "jukebox",     name = "Jukebox",           blurb = "Streamed files, crossfades, ducking", fx = "Fade" },
 }
@@ -536,7 +543,8 @@ do
     local sel = 1
     local spring = Tween.newSpring(0, 3)
     local focus, chan = "songs", 1
-    local muted = { false, false, false, false }
+    local muted = { false, false, false, false, false, false, false, false }
+    local nch = 4
     local syncFlash, syncValue = 0, 0
     local held_ = false
     local pulse = Shake.new("bump")
@@ -545,15 +553,14 @@ do
 
     local function applyMute()
         local m = {}
-        local names = { "pu1", "pu2", "wav", "noi" }
-        for c = 1, 4 do if muted[c] then m[#m + 1] = names[c] end end
+        for c = 1, 8 do if muted[c] then m[#m + 1] = c end end
         Chiptune.mute(m)
     end
 
     scenes.music = {
         enter = function() focus = "songs" end,
         leave = function()
-            muted = { false, false, false, false }; applyMute()
+            muted = { false, false, false, false, false, false, false, false }; applyMute()
             Chiptune.hold(nil); held_ = false
         end,
         input = function()
@@ -567,7 +574,7 @@ do
                 elseif stepped(LEFT) and chan > 1 then
                     chan = chan - 1; blip("cursor")
                 end
-                if stepped(RIGHT) then chan = chan % 4 + 1; blip("cursor") end
+                if stepped(RIGHT) then chan = chan % nch + 1; blip("cursor") end
                 if pressed(A) then muted[chan] = not muted[chan]; applyMute(); blip("toggle") end
                 if pressed(UP) or pressed(DOWN) then
                     held_ = not held_
@@ -585,9 +592,9 @@ do
         draw = function()
             gfx.clear(gfx.kColorWhite)
             header("Chiptune: Music", chipOk and "GBM driver, DMG APU" or "C extension not built")
-            list(SONGS, sel, 10, 30, 170, 17, 8, spring, function(s) return s.title end)
+            list(SONGS, sel, 10, 30, 180, 16, 9, spring, function(s) return s.title .. "  " .. s.tag end)
             gfx.setFont(fontBold)
-            gfx.drawText(SONGS[sel].style, 10, 172)
+            gfx.drawTextInRect(SONGS[sel].style, 10, 180, 185, 36)
             -- the mixer
             Shake.apply(pulse)
             local x0 = 215
@@ -598,7 +605,8 @@ do
             local order, row = Chiptune.position()
             gfx.setFont(fontMono)
             gfx.drawText(string.format("order %02d  row %02d%s", order, row, held_ and "  HOLD" or ""), x0, 58)
-            meters(x0 + 10, 82, 64, focus == "mixer" and chan or nil, muted)
+            nch = meters(x0 + 4, 82, 64, focus == "mixer" and chan or nil, muted, 170)
+            if chan > nch then chan = nch end
             if syncFlash > 0 then
                 gfx.setFont(fontBold)
                 gfx.fillRect(x0, 164, 160, 16)
@@ -664,7 +672,7 @@ do
                 gfx.drawText(plain(n), x + 2, y)
                 gfx.setImageDrawMode(gfx.kDrawModeCopy)
             end
-            meters(310, 34, 160, nil, nil, 22)
+            meters(308, 34, 160, nil, nil, 90)
             footer("d-pad pick   A fire (the music ducks)   B back")
         end,
     }

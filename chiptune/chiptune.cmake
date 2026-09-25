@@ -9,6 +9,7 @@
 set(CHIPTUNE_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(CHIPTUNE_SOURCES
     ${CHIPTUNE_DIR}/gbapu.c
+    ${CHIPTUNE_DIR}/vox.c
     ${CHIPTUNE_DIR}/gbm.c
     ${CHIPTUNE_DIR}/chip.c
     ${CHIPTUNE_DIR}/chiptune_pd.c)

@@ -17,6 +17,14 @@ Suffixes combine: `A3@bass+037`. A command alone: `.+F01`.
 Commands (the hex digit): 0 arpeggio, 1/2 slide up/down, 3 portamento,
 4 vibrato, 5 envelope/volume, 6 duty/wave, 7 delay, 8 pan, 9 retrigger,
 A cut, B jump, C sweep, D break, E sync marker, F groove.
+
+Format 2 (Song(..., version=2, voices=N)) adds up to 8 voices, an
+oscillator per instrument (pulse, wave, noise, sample, triangle, saw) that
+a table row can switch, 8-bit pulse width and PWM, ring and sync, and a
+filter. Its extended commands are written with a G-prefixed pair of hex
+digits after `+`: `+G10` cutoff, `+G11` resonance/mode, `+G12` cutoff slide,
+`+G13` filter routing, `+G14` width, `+G15` PWM, `+G16` oscillator,
+`+G17` ring, `+G18` sync -- e.g. `C4@lead+G1480` for a 50% pulse.
 """
 import math
 import re
@@ -37,7 +45,7 @@ def parse_note(s):
 
 
 def parse_cell(token, song=None):
-    m = re.fullmatch(r'([^@+]*)(?:@([\w-]+))?((?:\+[0-9A-Fa-f]{3})*)', token)
+    m = re.fullmatch(r'([^@+]*)(?:@([\w-]+))?((?:\+(?:[0-9A-Fa-f]{3}|G[0-9A-Fa-f]{4}))*)', token)
     if not m:
         raise ValueError(f'Bad cell: {token}')
     note, inst, fx = m[1], m[2], m[3]
@@ -56,7 +64,8 @@ def parse_cell(token, song=None):
             i = names.index(inst)
         cell['inst'] = i
     if fx:
-        cell['fx'] = [dict(cmd=int(f[0], 16), val=int(f[1:], 16)) for f in fx[1:].split('+')]
+        cell['fx'] = [dict(cmd=int(f[1:3], 16), val=int(f[3:], 16)) if f[0] == 'G'
+                      else dict(cmd=int(f[0], 16), val=int(f[1:], 16)) for f in fx[1:].split('+')]
     return cell
 
 
@@ -72,10 +81,14 @@ def parse_pattern(text, rows, song=None):
 # ─── a song under construction ────────────────────────────────────────────
 
 class Song:
-    def __init__(self, name, groove=(6, 6), rows=16, loop=0):
-        self.s = dict(format='gbm-song', version=1, name=name, rows=rows, loop=loop,
+    def __init__(self, name, groove=(6, 6), rows=16, loop=0, version=1, voices=4, filter=None):
+        self.voices = voices if version >= 2 else 4
+        self.s = dict(format='gbm-song', version=version, name=name, rows=rows, loop=loop,
                       grooves=[list(groove)], instruments=[], tables=[], waves=[],
                       patterns=[], orders=[], sfx=[])
+        if version >= 2:
+            self.s['voices'] = voices
+            self.s['filter'] = dict(dict(cutoff=255, resonance=0, mode=1), **(filter or {}))
 
     # -- parts
     def inst(self, kind, name, **o):
@@ -87,6 +100,14 @@ class Song:
         i.update(o)
         self.s['instruments'].append(i)
         return len(self.s['instruments']) - 1
+
+    def voice(self, osc, name, **o):
+        """A format-2 instrument: `osc` is pulse, wave, noise, sample,
+        triangle or saw. volume is 0-15 on every oscillator; width (0-255)
+        and pwm (a signed step a frame) for pulse; ring, sync and filter
+        flags; a table may switch `osc` row by row."""
+        kind = osc if osc in ('pulse', 'wave', 'noise') else 'pulse'
+        return self.inst(kind, name, osc=osc, **o)
 
     def table(self, name, rows, loop=None):
         """Rows are dicts of transpose, env, duty, pitch, fx=(cmd, val)."""
@@ -118,11 +139,13 @@ class Song:
         self.s['patterns'].append(dict(cells=cells))
         return len(self.s['patterns']) - 1
 
-    def bar(self, lanes, tr=(0, 0, 0, 0)):
-        """An order row from four pattern texts (PU1, PU2, WAV, NOI);
-        identical patterns are shared."""
+    def bar(self, lanes, tr=None):
+        """An order row from a pattern text per channel (format 1: PU1, PU2,
+        WAV, NOI); identical patterns are shared."""
+        if len(lanes) != self.voices:
+            raise ValueError(f'{len(lanes)} lanes for {self.voices} voices')
         pat = [self.pattern(t) for t in lanes]
-        self.s['orders'].append(dict(pat=pat, tr=list(tr)))
+        self.s['orders'].append(dict(pat=pat, tr=list(tr or [0] * self.voices)))
         return len(self.s['orders']) - 1
 
     def sfx(self, name, text, channel, priority=2, speed=2):
@@ -271,7 +294,7 @@ SYNTHS = dict(
 )
 
 
-def synth(song, name, preset=None, mode=None, speed=None, volume=3, **params):
+def synth(song, name, preset=None, mode=None, speed=None, volume=None, **params):
     """Adds a synth: its waves, a table stepping through them, and a wave
     instrument playing it. A preset from SYNTHS, or params of synth_waves."""
     if preset:
@@ -286,7 +309,11 @@ def synth(song, name, preset=None, mode=None, speed=None, volume=3, **params):
     if mode == 'pingpong':
         order = order + order[1:-1][::-1]
     t = song.table(f'{name} sweep', [dict(duty=first + i) for i in order], loop=None if (mode or 'once') == 'once' else 0)
-    return song.inst('wave', name, duty=first, volume=volume, table=t, tableSpeed=max(0, (speed or 1) - 1))
+    v2 = song.s['version'] >= 2
+    # format 1's wave level is 0-3; format 2 gives every oscillator 0-15
+    vol = volume if volume is not None else (11 if v2 else 3)
+    extra = {} if not v2 else dict(osc='wave')
+    return song.inst('wave', name, duty=first, volume=vol, table=t, tableSpeed=max(0, (speed or 1) - 1), **extra)
 
 
 # ─── drum samples (kit.ts) ────────────────────────────────────────────────
@@ -351,6 +378,47 @@ def synth_kit():
             dict(name='rim', data=to4bit(_render(0.04, rim))),
             dict(name='hat', data=to4bit(_render(0.05, hat), gain=0.8)),
             dict(name='clap', data=to4bit(_render(0.12, clap)))]
+
+
+def sample_voice(song, sample, name, volume=14, **o):
+    """Format 2: a drum sample on a voice of its own, taking nothing from
+    anyone. It plays at its own rate on C5 and follows the note."""
+    samples = song.s.setdefault('samples', [])
+    names = [x['name'] for x in samples]
+    if sample['name'] not in names:
+        samples.append(sample)
+        names.append(sample['name'])
+    return song.voice('sample', name, volume=volume, envPace=o.pop('envPace', 0), sample=names.index(sample['name']), **o)
+
+
+# ─── SID-style drums (format 2): one voice, the oscillator switched by table ──
+
+def sid_kick(song, name='skick', drop=0xB0, frames=6, volume=15):
+    """A frame of noise for the click, then a triangle falling fast: the C64
+    kick. Play around C4-E4."""
+    rows = [dict(osc='noise', transpose=10), dict(osc='triangle', fx=(0x2, drop))]
+    rows += [{} for _ in range(frames - 2)] + [dict(fx=(0xA, 1))]
+    t = song.table(f'{name} drum', rows)
+    return song.voice('triangle', name, volume=volume, envPace=2, table=t)
+
+
+def sid_snare(song, name='ssnare', volume=14, tone='triangle'):
+    """A tone for the body, then noise for the rattle, fading. Play around
+    G3-C4; the noise rows sit higher than the note."""
+    rows = [dict(osc=tone), dict(osc='noise', transpose=4), dict(transpose=2), dict(transpose=0)]
+    t = song.table(f'{name} drum', rows)
+    return song.voice(tone, name, volume=volume, envPace=2, table=t, width=96)
+
+
+def sid_tom(song, name='stom', volume=14):
+    """A pulse falling slower than the kick: a tom, pitched by the note."""
+    t = song.table(f'{name} drop', [dict(osc='noise', transpose=12), dict(osc='pulse', fx=(0x2, 0x30))])
+    return song.voice('pulse', name, volume=volume, envPace=2, table=t, width=128, length=12)
+
+
+def sid_hat(song, name='shat', open_=False, volume=7):
+    """Bright noise, short or open, metallic (7-bit)."""
+    return song.voice('noise', name, volume=volume, envPace=3 if open_ else 1, duty=1)
 
 
 def sample_inst(song, sample, name, volume=0, noise_volume=None, **o):
