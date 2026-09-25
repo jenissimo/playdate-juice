@@ -396,7 +396,9 @@ def sample_voice(song, sample, name, volume=14, **o):
 def sid_kick(song, name='skick', drop=0xB0, frames=6, volume=15):
     """A frame of noise for the click, then a triangle falling fast: the C64
     kick. Play around C4-E4."""
-    rows = [dict(osc='noise', transpose=10), dict(osc='triangle', fx=(0x2, drop))]
+    # the click a few shapes above the note, not the brightest: one frame
+    # of the top shapes is hiss more than punch
+    rows = [dict(osc='noise', transpose=3), dict(osc='triangle', fx=(0x2, drop))]
     rows += [{} for _ in range(frames - 2)] + [dict(fx=(0xA, 1))]
     t = song.table(f'{name} drum', rows)
     return song.voice('triangle', name, volume=volume, envPace=2, table=t)

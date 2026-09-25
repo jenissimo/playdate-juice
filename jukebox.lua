@@ -6,7 +6,7 @@
 -- when the system menu closes" -- and every one of those, done wrong, reads as
 -- a music-logic bug rather than an audio glitch.
 --
--- Deliberately independent of sfxkit: no import-order coupling, no shared
+-- Deliberately independent of chiptune: no import-order coupling, no shared
 -- state. Where a moment needs both (a win jingle ducking the bed) the SCENE
 -- calls both, because the scene is the only thing that knows the moment.
 Jukebox = Jukebox or {}

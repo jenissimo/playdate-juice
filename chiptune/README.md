@@ -150,7 +150,7 @@ songs` rebuilds `music/`.
 
 ## The SFX library
 
-`music/sfx.gbm`, 38 effects, fired by name:
+`music/sfx.gbm`, 84 effects, fired by name:
 
 | | |
 |---|---|
@@ -159,6 +159,17 @@ songs` rebuilds `music/`.
 | combat | `hit` `hurt` `laser` `shoot` `explosion` `small_boom` `fuse` `sweep_shot` `death` |
 | rewards | `coin` `pickup` `powerup` `oneup` `chest` `heal` `key` `magic` `win` `lose` |
 | world | `door` `charge` `warp` `alarm` |
+| transitions | `tr_<name>_fwd` / `tr_<name>_back` for each of `transitions.lua`'s 23 effects (`tr_slide_fwd`, `tr_clock_wipe_back`, ...) |
+
+The transition whooshes are a noise shape walking up (forward) or down (back)
+through a table, some with a tone on their first frames; `transitions.lua`
+plays them when a game defines a `TransitionSounds.play(name, dir)` hook:
+
+```lua
+TransitionSounds = { play = function(name, dir)
+    return Chiptune.sfx("tr_" .. name:lower():gsub(" ", "_") .. "_" .. dir)
+end }
+```
 
 It is a format-2 bank on voices 6 and 7: every Game Boy song and every
 format-2 song of up to 6 voices keeps all of its own channels -- an effect

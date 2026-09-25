@@ -170,18 +170,20 @@ def tidal_twang():
     body; a pluck bass on the wave synth; noise snare with ghost notes,
     accented hats, a crash on each section."""
     s = Song('Tidal Twang', groove=(5, 5), loop=2)
-    s.inst('pulse', 'trem', duty=1, volume=11, envPace=1)
+    s.inst('pulse', 'trem', duty=2, volume=10, envPace=1)
     twang_art = articulation(s, 'twang', peak=13, sustain=11, scoop=8, frames=3, hold_pace=3)
     s.inst('pulse', 'twang', duty=2, volume=12, envPace=3, vibSpeed=6, vibDepth=2, vibDelay=10, table=twang_art)
-    s.inst('pulse', 'chug', duty=2, volume=7, envPace=1, length=4)
-    pulse_kick(s, drop=0xE0, frames=6)
+    s.inst('pulse', 'chug', duty=2, volume=6, envPace=1, length=4)
+    s.s['instruments'][pulse_kick(s, drop=0xE0, frames=6)]['volume'] = 12
     synth(s, 'bass', 'pluckBass', volume=3)
-    kit = dict(s=f'#33@{s.s["instruments"][noise_snare(s)]["name"]}',
-               g=f'#33@{s.s["instruments"][noise_snare(s, name="ghost", volume=6)]["name"]}',
-               h=f'#43@{s.s["instruments"][noise_hat(s, volume=5)]["name"]}',
-               H=f'#43@{s.s["instruments"][noise_hat(s, name="hatA", volume=9)]["name"]}',
-               o=f'#41@{s.s["instruments"][noise_hat(s, open_=True)]["name"]}',
-               c=f'#38@{s.s["instruments"][noise_crash(s)]["name"]}')
+    crash = noise_crash(s)
+    s.s['instruments'][crash]['volume'] = 9
+    kit = dict(s=f'#31@{s.s["instruments"][noise_snare(s, volume=11)]["name"]}',
+               g=f'#31@{s.s["instruments"][noise_snare(s, name="ghost", volume=5)]["name"]}',
+               h=f'#40@{s.s["instruments"][noise_hat(s, volume=4)]["name"]}',
+               H=f'#40@{s.s["instruments"][noise_hat(s, name="hatA", volume=7)]["name"]}',
+               o=f'#39@{s.s["instruments"][noise_hat(s, open_=True, volume=7)]["name"]}',
+               c=f'#37@{s.s["instruments"][crash]["name"]}')
     beat = drums('H . h . s . h g H . h . s . h o', kit)
     beat2 = drums('H . h . s . h g H . h g s . s o', kit)
     fill = drums('H . s . s . s g H s g s s+902 . s s', kit)
@@ -317,25 +319,27 @@ def crimson_clash():
     chords in 16ths, then in 8ths an octave up for the bridge; a sawtooth
     octave bass that walks into each chord a semitone under; PWM brass
     stabs on a 3+3+2 accent; soft and accented hats."""
-    s = Song('Crimson Clash', groove=(6, 5), loop=2, version=2, voices=7)
+    s = Song('Crimson Clash', groove=(6, 5), loop=2, version=2, voices=7,
+             filter=dict(cutoff=210, resonance=3, mode=1))
     s.voice('pulse', 'master', volume=0, envDir=1, envPace=0, width=128)
-    ups = [12, 14, 16, 18, 20, 22, 24, 26, 28, 27, 25, 23, 22, 21, 20, 19]
+    ups = [12, 13, 14, 16, 18, 20, 22, 23, 24, 23, 22, 21, 20, 19, 18, 17]
     rows = [dict(transpose=t) for t in ups]
     rows[0]['env'] = env_byte(14, -1, 1)          # the accent
     rows[4]['env'] = env_byte(12, -1, 0)          # the sustain
     sweep = s.table('sync sweep', rows)
-    s.voice('saw', 'sync', volume=12, envPace=0, sync=True, table=sweep, vibSpeed=5, vibDepth=2, vibDelay=16)
-    s.voice('pulse', 'arp', volume=6, width=48, envPace=1)
+    # through a gentle low-pass (~4.4 kHz): a synced saw's top end is fizz
+    s.voice('saw', 'sync', volume=12, envPace=0, sync=True, filter=True, table=sweep, vibSpeed=5, vibDepth=2, vibDelay=16)
+    s.voice('pulse', 'arp', volume=6, width=88, envPace=1)
     s.voice('pulse', 'arp8', volume=7, width=80, envPace=2)
     s.voice('saw', 'bass', volume=10, envPace=1)
     sid_kick(s)
     sid_snare(s)
     sid_tom(s)
-    s.voice('noise', 'hat', volume=4, envPace=1, duty=1)
-    s.voice('noise', 'hatA', volume=8, envPace=1, duty=1)
-    s.voice('noise', 'crash', volume=9, envPace=6)
+    s.voice('noise', 'hat', volume=3, envPace=1)
+    s.voice('noise', 'hatA', volume=6, envPace=1)
+    s.voice('noise', 'crash', volume=7, envPace=6)
     s.voice('pulse', 'brass', volume=10, width=100, pwm=6, envPace=2)
-    kit = dict(k='D4@skick', s='A3@ssnare', t='E4@stom', u='B3@stom', h='#43@hat', H='#43@hatA', c='#38@crash')
+    kit = dict(k='D4@skick', s='G3@ssnare', t='E4@stom', u='B3@stom', h='#40@hat', H='#40@hatA', c='#37@crash')
     beat = (drums('k . . k s . . k . k . . s . . .', kit), drums('H . h . H . h . H . h . H . h h', kit))
     beat2 = (drums('k . . k s . . k . k . k s . s s', kit), drums('H . h . H . h . H . h . H h H h', kit))
     fill = (drums('s . s s t . t t u . u u s s s s', kit), drums('c . . . . . . . . . . . . . . .', kit))
@@ -582,10 +586,10 @@ def victory():
     s.voice('pulse', 'brass', volume=13, width=110, pwm=4, envPace=0, vibSpeed=5, vibDepth=2, vibDelay=16, table=art)
     s.voice('pulse', 'brass2', volume=9, width=70, pwm=-3, envPace=0, vibSpeed=5, vibDepth=2, vibDelay=16)
     s.voice('pulse', 'bass', volume=10, width=80, envPace=2)
-    sid_snare(s)
+    sid_snare(s, volume=11)
     sid_kick(s)
-    s.voice('noise', 'crash', volume=11, envPace=6)
-    kit = dict(s='A3@ssnare', k='D4@skick', c='#38@crash')
+    s.voice('noise', 'crash', volume=8, envPace=6)
+    kit = dict(s='G3@ssnare', k='D4@skick', c='#37@crash')
     s.bar(['G4@brass . G4 . G4 . C5 . . . . . . . . .', 'E4@brass2 . E4 . E4 . G4 . . . . . . . . .',
            'C3@bass . C3 . C3 . C3 . . . . . . . . .', drums('s . s . s . k . . . . . k . s s', kit),
            drums('. . . . . . c . . . . . . . . .', kit)])
@@ -637,8 +641,166 @@ SONGS = {
 
 # ─── the SFX library ──────────────────────────────────────────────────────
 
+# The demo's transition sounds, once SfxKit recipes, as data: per transition
+# its layers as (group, attack, decay, sustain, release, volume, hz forward,
+# hz back, length in seconds). sfx_library() turns each into two effects.
+TRANSITION_SOUNDS = {
+    'Slide': [
+        ('noise', 0.02, 0.2, 0.08, 0.25, 0.18, 350, 250, 0.38),
+        ('noise', 0.01, 0.12, 0.04, 0.18, 0.056, 700, 500, 0.28),
+        ('tr', 0.03, 0.15, 0.03, 0.2, 0.009, 500, 380, 0.3),
+    ],
+    'Fade': [
+        ('noise', 0.15, 0.3, 0.15, 0.4, 0.084, 280, 340, 0.6),
+        ('si', 0.15, 0.25, 0.1, 0.35, 0.008, 440, 520, 0.55),
+    ],
+    'Dissolve': [
+        ('noise', 0.06, 0.25, 0.12, 0.3, 0.085, 400, 300, 0.5),
+        ('noise', 0.08, 0.2, 0.08, 0.25, 0.024, 800, 600, 0.4),
+    ],
+    'Circle': [
+        ('noise', 0.01, 0.15, 0.2, 0.3, 0.128, 450, 320, 0.4),
+        ('noise', 0.02, 0.1, 0.1, 0.2, 0.03, 900, 640, 0.35),
+        ('si', 0.02, 0.1, 0.12, 0.25, 0.008, 600, 800, 0.35),
+    ],
+    'Diamonds': [
+        ('noise', 0.008, 0.1, 0.04, 0.15, 0.112, 600, 450, 0.22),
+        ('noise', 0.003, 0.06, 0.02, 0.1, 0.048, 1200, 900, 0.15),
+        ('tr', 0.005, 0.08, 0.02, 0.12, 0.009, 1100, 850, 0.2),
+    ],
+    'Diamond Wave': [
+        ('noise', 0.01, 0.18, 0.08, 0.22, 0.105, 500, 380, 0.38),
+        ('noise', 0.015, 0.12, 0.05, 0.18, 0.03, 1000, 750, 0.3),
+        ('tr', 0.02, 0.1, 0.04, 0.15, 0.006, 880, 660, 0.28),
+    ],
+    'Triangles': [
+        ('noise', 0.003, 0.06, 0.01, 0.08, 0.144, 550, 420, 0.12),
+        ('noise', 0.001, 0.03, 0.0, 0.05, 0.07, 1100, 850, 0.06),
+        ('tr', 0.003, 0.04, 0.01, 0.06, 0.006, 950, 750, 0.1),
+    ],
+    'Bubbles': [
+        ('noise', 0.02, 0.15, 0.12, 0.2, 0.098, 420, 300, 0.4),
+        ('noise', 0.01, 0.08, 0.06, 0.15, 0.035, 850, 600, 0.3),
+        ('si', 0.01, 0.06, 0.08, 0.15, 0.008, 800, 550, 0.3),
+    ],
+    'Blinds': [
+        ('noise', 0.005, 0.07, 0.02, 0.1, 0.136, 480, 360, 0.15),
+        ('noise', 0.002, 0.04, 0.01, 0.06, 0.054, 950, 720, 0.08),
+    ],
+    'Clock Wipe': [
+        ('noise', 0.015, 0.2, 0.15, 0.2, 0.091, 380, 280, 0.5),
+        ('noise', 0.02, 0.15, 0.08, 0.15, 0.023, 750, 560, 0.4),
+        ('tr', 0.01, 0.1, 0.06, 0.12, 0.005, 520, 420, 0.4),
+    ],
+    'Wave Wipe': [
+        ('noise', 0.03, 0.22, 0.12, 0.25, 0.136, 320, 230, 0.5),
+        ('noise', 0.04, 0.18, 0.08, 0.2, 0.035, 640, 460, 0.4),
+        ('tr', 0.05, 0.15, 0.06, 0.2, 0.005, 480, 360, 0.38),
+    ],
+    'Interleave': [
+        ('noise', 0.005, 0.08, 0.04, 0.12, 0.12, 520, 400, 0.2),
+        ('noise', 0.002, 0.04, 0.02, 0.08, 0.044, 1050, 800, 0.12),
+    ],
+    'Dither Bands': [
+        ('noise', 0.01, 0.15, 0.1, 0.2, 0.105, 430, 330, 0.35),
+        ('noise', 0.005, 0.08, 0.04, 0.12, 0.035, 860, 660, 0.2),
+        ('sq', 0.002, 0.03, 0.01, 0.05, 0.006, 700, 560, 0.08),
+    ],
+    'Spiral': [
+        ('noise', 0.02, 0.22, 0.12, 0.25, 0.113, 440, 330, 0.5),
+        ('noise', 0.015, 0.15, 0.06, 0.2, 0.027, 880, 660, 0.4),
+        ('tr', 0.025, 0.12, 0.05, 0.18, 0.006, 650, 480, 0.45),
+    ],
+    'Wind': [
+        ('noise', 0.04, 0.25, 0.15, 0.3, 0.2, 350, 250, 0.5),
+        ('noise', 0.02, 0.15, 0.08, 0.2, 0.048, 700, 500, 0.4),
+    ],
+    'Melt': [
+        ('noise', 0.01, 0.25, 0.12, 0.3, 0.105, 300, 480, 0.5),
+        ('noise', 0.03, 0.18, 0.08, 0.22, 0.027, 600, 960, 0.4),
+        ('si', 0.02, 0.15, 0.06, 0.25, 0.005, 450, 700, 0.45),
+    ],
+    'Shatter': [
+        ('noise', 0.003, 0.1, 0.04, 0.2, 0.22, 500, 380, 0.22),
+        ('noise', 0.001, 0.04, 0.02, 0.1, 0.096, 1200, 900, 0.1),
+        ('sq', 0.001, 0.01, 0.0, 0.03, 0.012, 1400, 1100, 0.03),
+    ],
+    'Scanline': [
+        ('noise', 0.008, 0.18, 0.1, 0.15, 0.078, 800, 600, 0.35),
+        ('noise', 0.005, 0.1, 0.06, 0.1, 0.024, 1600, 1200, 0.25),
+        ('sq', 0.006, 0.12, 0.05, 0.08, 0.004, 1800, 1400, 0.2),
+    ],
+    'Pixel Shift': [
+        ('noise', 0.002, 0.07, 0.03, 0.12, 0.128, 450, 340, 0.2),
+        ('noise', 0.001, 0.04, 0.015, 0.08, 0.054, 900, 680, 0.1),
+    ],
+    'Hexagons': [
+        ('noise', 0.005, 0.09, 0.03, 0.12, 0.112, 530, 400, 0.18),
+        ('noise', 0.008, 0.06, 0.02, 0.1, 0.035, 1060, 800, 0.15),
+        ('tr', 0.005, 0.06, 0.02, 0.08, 0.006, 820, 650, 0.15),
+    ],
+    'Diagonal': [
+        ('noise', 0.01, 0.12, 0.05, 0.18, 0.136, 400, 290, 0.28),
+        ('noise', 0.005, 0.07, 0.03, 0.12, 0.044, 800, 580, 0.2),
+        ('tr', 0.01, 0.06, 0.02, 0.1, 0.006, 600, 440, 0.22),
+    ],
+    'Paw Walk': [
+        ('noise', 0.004, 0.05, 0.02, 0.06, 0.09, 240, 200, 0.1),
+        ('tr', 0.002, 0.06, 0.0, 0.05, 0.03, 160, 140, 0.08),
+    ],
+    'Blink': [
+        ('noise', 0.01, 0.14, 0.06, 0.16, 0.11, 300, 360, 0.3),
+        ('si', 0.02, 0.12, 0.05, 0.18, 0.02, 220, 280, 0.28),
+    ],
+}
+
+
+def transition_name(name, direction):
+    """The effect for a transition: tr_<name>_fwd / tr_<name>_back."""
+    return 'tr_' + name.lower().replace(' ', '_') + '_' + direction
+
+
+def add_transition_sfx(s, voice, prio=1):
+    """Each transition's whoosh, both ways: a noise shape walking up (going
+    forward) or down (going back) through a table, with the old recipe's
+    attack, length and loudness; where the recipe had a tonal layer, the
+    first two frames are that tone on a triangle -- a pitched edge on the
+    whoosh, the SID snare trick run backwards."""
+    import math
+    for name, layers in TRANSITION_SOUNDS.items():
+        noise = next(l for l in layers if l[0] == 'noise')
+        tone = next((l for l in layers if l[0] != 'noise'), None)
+        _, attack, _, _, _, vol, hz_f, hz_b, length = noise
+        frames = max(4, min(40, round(length * 60)))
+        peak = max(6, min(12, round(4 + vol * 40)))
+        pace = max(1, min(7, round(length * 64 / peak)))
+        for fwd in (True, False):
+            hz = hz_f if fwd else hz_b
+            n0 = max(12, min(40, round(24 + 3 * math.log2(hz / 400))))
+            sweep = 3 if fwd else -3
+            rows = [dict(transpose=round(sweep * f / (frames - 1))) for f in range(frames)]
+            rows[0]['osc'] = 'noise'
+            fa = round(attack * 60)
+            if fa >= 3:          # a slow attack: rise, then fall from the peak
+                rows[0]['env'] = env_byte(max(2, peak // 3), 1, 1)
+                rows[fa]['env'] = env_byte(peak, -1, pace)
+            if tone:
+                th = tone[6] if fwd else tone[7]
+                nt = round(12 * math.log2(th / 32.70))
+                for f in (0, 1):
+                    rows[f]['osc'] = 'triangle'
+                    rows[f]['transpose'] = nt - n0
+                rows[2]['osc'] = 'noise'
+            key = transition_name(name, 'fwd' if fwd else 'back')
+            t = s.table(key, rows)
+            s.voice('noise', key, volume=peak, envPace=pace, table=t)
+            s.sfx(key, f'#{n0}@{key} ' + '. ' * (frames - 1) + '-', voice, prio, 1)
+
+
 def sfx_library():
-    """38 effects in one format-2 bank, on voices 6 and 7: a song of up to 6
+    """84 effects in one format-2 bank, on voices 6 and 7 -- 38 for games
+    and a whoosh each way for each of the 23 transitions (tr_<name>_fwd,
+    tr_<name>_back): a song of up to 6
     voices -- and every Game Boy song -- keeps all of its own. Priorities: 1
     interface, 2 gameplay, 3 events, 4 the big ones; a stronger effect takes
     a slot from a weaker one. Voice 7 carries the interface, voice 6 the
@@ -734,5 +896,6 @@ def sfx_library():
     ]
     for name, text, ch, prio, speed in fx:
         s.sfx(name, text, ch, prio, speed)
+    add_transition_sfx(s, GAME)
     s.s['orders'] = []
     return s

@@ -916,8 +916,10 @@ function Transitions.start(effect, direction, duration)
     frames = duration or 24
     incoming_captured = false
     Transitions.active = true
-    -- Optional companion module from the demo app; looked up at call time so
-    -- this file never depends on import order.
+    -- An optional sound hook: define a global TransitionSounds with
+    -- play(name, dir) -- chiptune's SFX bank has a whoosh each way for every
+    -- effect (chiptune/README.md). Looked up at call time so this file never
+    -- depends on import order.
     local sounds = rawget(_G, "TransitionSounds")
     if sounds then sounds.play(name, dir) end
 end

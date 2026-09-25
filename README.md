@@ -1,19 +1,18 @@
 # playdate-juice
 
 Drop-in game-feel modules for [Playdate](https://play.date/): scene
-transitions, a procedural sound engine, music, Game Boy chiptune, tweens,
-screen shake, particles and animated backgrounds.
+transitions, chiptune music and sound effects, streamed music, tweens, screen
+shake, particles and animated backgrounds.
 
-Eight independent modules. Take one, take all of them — nothing here imports
-anything else in the repo. Seven are single Lua files; chiptune is a Lua file
+Seven independent modules. Take one, take all of them — nothing here imports
+anything else in the repo. Six are single Lua files; chiptune is a Lua file
 plus a C extension (`chiptune/`).
 
 | Module | Global | What it is |
 |---|---|---|
 | `transitions.lua` | `Transitions` | 23 direction-aware scene transitions + a scene-hop plan |
-| `sfxkit.lua` | `SfxKit` | procedural SFX: voice pool, time-based allocator, recipes as data |
 | `jukebox.lua` | `Jukebox` | streamed music: crossfades, ducking, pause handling |
-| `chiptune.lua` + `chiptune/` | `Chiptune` | tracker music and SFX: a C port of a real Game Boy driver, plus an 8-voice SID-style mode; 9 songs, 38 effects |
+| `chiptune.lua` + `chiptune/` | `Chiptune` | tracker music and SFX: a C port of a real Game Boy driver, plus an 8-voice SID-style mode; 9 songs, 84 effects |
 | `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs — zero per-frame allocation |
 | `shake.lua` | `Shake` | trauma-based screen shake with deterministic noise |
 | `particles.lua` | `Particles` | pooled 1-bit particle system |
@@ -33,7 +32,7 @@ git submodule add https://github.com/jenissimo/playdate-juice Source/juice
 ```
 
 ```lua
-import "juice/sfxkit"
+import "juice/chiptune"
 import "juice/transitions"
 ```
 
@@ -84,54 +83,6 @@ Paw Walk needs `images/paw_print.png` and `images/paw_plate.png`; they load
 lazily on first use and degrade to an unstamped wipe if missing.
 `Transitions.setImagePath("your/folder/")` repoints them.
 
-## sfxkit
-
-Procedural sound effects without hand-managing synths.
-
-```lua
-import "sfxkit"
-
-SfxKit.load{
-    buses  = { sfx = { volume = 0.85, crush = { amount = 0.22, mix = 0.35 } } },
-    groups = { lead  = { wave = "square", count = 6, bus = "sfx" },
-               riser = { wave = "square", count = 1, bus = "sfx", lfo = "sawtoothUp" } },
-    budget = { synth = 2, sample = 1 },
-}
-
-SfxKit.define("confirm", { prio = 1, notes = {
-    { group = "lead", hz = 392.00, vol = 0.30, len = 0.07, at = 0.000, adsr = { 0, 0.05, 0, 0.04 } },
-    { group = "lead", hz = 523.25, vol = 0.30, len = 0.07, at = 0.055, adsr = { 0, 0.05, 0, 0.04 } },
-} })
-
-function playdate.update()
-    SfxKit.frame()        -- must be first: resets this frame's emit budget
-    ...
-    SfxKit.emit("confirm")
-end
-```
-
-A recipe can also be a `function(...)` returning a recipe, for sounds that read
-game state.
-
-**Why not just call `playdate.sound` directly:**
-
-- **A synth holds exactly one note event.** Play a second note on a synth that
-  is still holding one and the first is not mixed — it is *deleted*. The usual
-  workaround is hand-assigning voices ("use `LEAD[4]` here, because the confirm
-  sound took `LEAD[1..3]` this frame"), which encodes one specific scene graph
-  and does not survive being moved. `sfxkit` allocates by audio time *and* by
-  frame, which covers both the same-frame collision and the note scheduled 0.9 s
-  ahead that a later emit would otherwise truncate.
-- **Frame budget.** Six input branches can each want a sound in one frame.
-  Priority 1 always sounds; 2 and 3 spend a budget and are dropped when it is
-  gone. Charged per *sound*, not per note, so chords survive.
-- **Glide maths that is actually right.** A frequency modulator is scaled in
-  octaves, not Hz, and a sawtooth LFO covers its range in one period, so the
-  rate is `1/T`. Both mistakes fail silently — `playNote` never complains.
-  `SfxKit.glide(hi, lo, seconds)` returns the correct rate/centre/depth.
-- **Recipes are data**, so `SfxKit.validate` turns a typo'd group name into a
-  test failure instead of silence on hardware.
-
 ## jukebox
 
 ```lua
@@ -171,8 +122,8 @@ voices, an oscillator per instrument that a table can switch frame by frame
 (SID drums), PWM, ring modulation, hard sync and a resonant filter. It ships
 with nine songs, each a style and a set of chiptune techniques -- sampled and
 synthesised drums, arpeggio chords, a 303 acid line, a sync lead, a
-ring-modulated bell, a reese bass, tremolo by retrigger -- and a 38-effect SFX
-library, all written as code you can read and change.
+ring-modulated bell, a reese bass, tremolo by retrigger -- and an 84-effect SFX
+library (a set of game sounds, and a whoosh each way for every transition), all written as code you can read and change.
 
 It needs its C half built into the game (a few lines of CMake). Without it,
 `tools/chiptune.py render-all` turns the same music into ADPCM files for

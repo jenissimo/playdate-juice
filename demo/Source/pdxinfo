@@ -1,6 +1,6 @@
 name=Juice Zoo
 author=jenissimo
-description=Every playdate-juice module in one place: transitions, backgrounds, tween, shake, particles, sfxkit, jukebox and chiptune
+description=Every playdate-juice module in one place: transitions, backgrounds, tween, shake, particles, jukebox and chiptune
 bundleID=com.jenissimo.juice.zoo
 version=2.0.0
 buildNumber=2
