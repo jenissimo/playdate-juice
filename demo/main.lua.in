@@ -71,6 +71,10 @@ function playdate.gameWillResume() Chiptune.resume(); Jukebox.resume() end
 
 local tick = 0
 
+-- Playdate text markup: _ toggles italic and * bold. Names like
+-- "double_jump" come from data, so they are shown with spaces.
+local function plain(name) return (name:gsub("_", " ")) end
+
 local function outlined(text, x, y)
     gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
     for dx = -1, 1 do
@@ -135,25 +139,27 @@ end
 
 -- Four channel meters: the chiptune APU as it sounds right now.
 local meterPeak = { 0, 0, 0, 0 }
-local function meters(x, y, h, cursor, muted)
+local function meters(x, y, h, cursor, muted, step)
+    step = step or 30
+    local bw = min(22, step - 2)
     local lv = { Chiptune.levels() }
     local names = { "PU1", "PU2", "WAV", "NOI" }
     gfx.setFont(fontBold)
     for c = 1, 4 do
         local v = lv[c] or 0
         meterPeak[c] = max(v, meterPeak[c] - 0.5)
-        local bx = x + (c - 1) * 30
+        local bx = x + (c - 1) * step
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawRect(bx, y, 22, h)
+        gfx.drawRect(bx, y, bw, h)
         local fill = floor((h - 4) * v / 15)
-        gfx.fillRect(bx + 2, y + h - 2 - fill, 18, fill)
+        gfx.fillRect(bx + 2, y + h - 2 - fill, bw - 4, fill)
         local py = y + h - 2 - floor((h - 4) * meterPeak[c] / 15)
-        gfx.drawLine(bx + 2, py, bx + 19, py)
+        gfx.drawLine(bx + 2, py, bx + bw - 3, py)
         if muted and muted[c] then
-            gfx.drawLine(bx, y, bx + 22, y + h)
-            gfx.drawLine(bx + 22, y, bx, y + h)
+            gfx.drawLine(bx, y, bx + bw, y + h)
+            gfx.drawLine(bx + bw, y, bx, y + h)
         end
-        if cursor == c then gfx.fillRect(bx, y + h + 16, 22, 2) end
+        if cursor == c then gfx.fillRect(bx, y + h + 16, bw, 2) end
         gfx.drawText(names[c], bx, y + h + 3)
     end
 end
@@ -237,7 +243,7 @@ scenes.hub = {
         gfx.setFont(fontBold)
         outlined(EXHIBITS[hubSel].blurb, 12, H - 18)
         if chipOk and Chiptune.current() then
-            local s = "~ " .. Chiptune.current():gsub("_", " ")
+            local s = "~ " .. plain(Chiptune.current())
             local sw = gfx.getTextSize(s)
             outlined(s, W - sw - 10, 4)
         end
@@ -584,7 +590,7 @@ do
             panel(x0 - 12, 28, 190, 158)
             local now = Chiptune.current()
             gfx.setFont(fontTitle)
-            gfx.drawText(now and now:gsub("_", " ") or "(stopped)", x0, 38)
+            gfx.drawText(now and plain(now) or "(stopped)", x0, 38)
             local order, row = Chiptune.position()
             gfx.setFont(fontMono)
             gfx.drawText(string.format("order %02d  row %02d%s", order, row, held_ and "  HOLD" or ""), x0, 58)
@@ -642,15 +648,15 @@ do
             end
             for i, n in ipairs(names) do
                 local col, row = (i - 1) // ROWS, (i - 1) % ROWS
-                local x, y = 10 + col * 112, 28 + row * 14
+                local x, y = 8 + col * 100, 28 + row * 14
                 if i == sel then
-                    gfx.fillRect(x - 2, y - 1, 108, 14)
+                    gfx.fillRect(x - 2, y - 1, 98, 14)
                     gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
                 end
-                gfx.drawText(n, x + 2, y)
+                gfx.drawText(plain(n), x + 2, y)
                 gfx.setImageDrawMode(gfx.kDrawModeCopy)
             end
-            meters(346, 36, 150, nil, nil)
+            meters(310, 34, 160, nil, nil, 22)
             footer("d-pad pick   A fire (the music ducks)   B back")
         end,
     }
