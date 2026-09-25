@@ -53,10 +53,12 @@ function Chiptune.parseNames(bytes)
 end
 
 --- Channel list -> the driver's mute mask. Accepts a mask as it is, or names
---- ("pu1", "pu2", "wav", "noi") / numbers 1-4, so call sites read as intent.
-local CHANNEL = { pu1 = 1, pu2 = 2, wav = 4, noi = 8, [1] = 1, [2] = 2, [3] = 4, [4] = 8 }
+--- ("pu1", "pu2", "wav", "noi") / numbers 1-8 (a format-2 song has up to 8
+--- voices), so call sites read as intent.
+local CHANNEL = { pu1 = 1, pu2 = 2, wav = 4, noi = 8 }
+for n = 1, 8 do CHANNEL[n] = 1 << (n - 1) end
 function Chiptune.mask(channels)
-    if type(channels) == "number" then return channels & 15 end
+    if type(channels) == "number" then return channels & 255 end
     local m = 0
     for _, c in ipairs(channels or {}) do
         local b = CHANNEL[type(c) == "string" and c:lower() or c]
@@ -221,8 +223,9 @@ function Chiptune.position()
     return order, row
 end
 
---- Four channel levels, 0-15 (PU1, PU2, WAV, NOI), as they sound right now:
---- for meters and for things that pulse with the music.
+--- A level 0-15 per music channel (PU1, PU2, WAV, NOI; or a format-2 song's
+--- 1-8 voices), as they sound right now: for meters and for things that
+--- pulse with the music.
 function Chiptune.levels()
     if not Chiptune._ready then return 0, 0, 0, 0 end
     return native.levels()

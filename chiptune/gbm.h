@@ -11,12 +11,21 @@
    and gets the channel back, retriggered, when the effect ends. While any
    SFX plays the other music channels are ducked.
 
+   Two formats. Format 1 is the original's, played on gbapu and held to the
+   original write for write. Format 2 (chiptune/README.md) is this port's
+   own: up to 8 voices, each instrument picking its oscillator (and a table
+   switching it frame by frame, as SID drums do), continuous pulse width and
+   PWM, triangle and saw, ring modulation, hard sync and a resonant filter;
+   it plays on vox. Everything else -- rows, commands, tables, SFX, ducking
+   -- is the same machinery.
+
    Not thread-safe: one thread owns a Gbm. chip.h wraps it for an audio
    callback. */
 #ifndef GBM_H
 #define GBM_H
 #include <stdint.h>
 #include "gbapu.h"
+#include "vox.h"
 
 typedef struct {
     uint8_t flags, trig, block, hw;
@@ -34,19 +43,32 @@ typedef struct {
     uint8_t transpose;
     const uint8_t *insp;
     uint8_t dnote, pan, prio, speed, speed_n, bank;
+    /* format 2 */
+    uint8_t osc, xflags, sample;
+    int8_t pwm;
 } GbmChan;
 
-typedef struct { const uint8_t *base, *ins, *tbl, *wave; } GbmBank;
+typedef struct {
+    const uint8_t *base, *ins, *tbl, *wave;
+    uint8_t version, rec, trow;        /* format; instrument and table-row sizes */
+} GbmBank;
+
+#define GBM_VOICES 8                    /* music channels, at most */
+#define GBM_SLOT0 GBM_VOICES            /* the two SFX slots follow them */
+#define GBM_SLOT1 (GBM_VOICES + 1)
 
 typedef struct Gbm {
     GbApu *apu;
-    GbmChan ch[6];
+    Vox *vox;
+    GbmChan ch[GBM_VOICES + 2];
     GbmBank banks[2];
-    const uint8_t *patdir[5];
+    const uint8_t *patdir[GBM_VOICES];
+    const uint8_t *sfxdir;
+    uint8_t nv, v2;                     /* music channels; playing on vox */
     const uint8_t *orders, *groove, *groovetab;
     uint8_t rows, order_count, loop_order, tick_n, groove_pos;
     uint8_t jump, brk, paused, muted;
-    uint8_t owner[4];
+    uint8_t owner[GBM_VOICES];
     const uint8_t *wave_ptr;
     uint8_t duck_amount, duck_speed, duck_level, duck_n;
     /* Where the song is: order/row name the next row to play; sync holds the
@@ -64,7 +86,8 @@ typedef struct Gbm {
     uint8_t timer_irq, timer_restart;
 } Gbm;
 
-void gbm_init(Gbm *g, GbApu *apu);
+/* `vox` may be NULL: format-2 blobs then play silent. */
+void gbm_init(Gbm *g, GbApu *apu, Vox *vox);
 void gbm_play(Gbm *g, const uint8_t *song);
 void gbm_seek(Gbm *g, uint8_t order, uint8_t row);
 void gbm_stop(Gbm *g);

@@ -90,14 +90,19 @@ Lua on this CPU. The rules above carry over:
 - `chiptune.lua` follows rules 1-3: it loads under host `lua`, touches nothing
   until `Chiptune.load`, and with no `chiptune_native` present every call is
   a no-op (`Chiptune.available` is false).
-- The C splits the same way: `gbapu.c`, `gbm.c` and `chip.c` are pure C99 with
+- The C splits the same way: `gbapu.c`, `vox.c`, `gbm.c` and `chip.c` are pure C99 with
   no SDK header, and are what `python tools/chiptune.py test` compiles and
   runs on the host. Only `chiptune_pd.c` / `chiptune_main.c` include
   `pd_api.h`.
 - The driver is a port held to the original's behaviour by recorded traces
   (`test/chiptune/golden.zip`). A change to `gbm.c` that alters any APU write
   fails that test; if the change is meant to, say so and re-record, don't
-  loosen the comparison.
+  loosen the comparison. Format 2 has no original: `test/chiptune/v2_test.c`
+  holds it to what its features promise.
+- The render path runs on a Cortex-M7 in an interrupt: single-precision float
+  only (`-Wdouble-promotion` is on for the device), no division or allocation
+  per sample, and measure with `tools/chiptune.py render ... --bench` before
+  and after a change to it.
 - The game thread never calls into the driver directly: it posts to `chip.c`'s
   queue, which the audio callback drains. Keep it that way; the audio callback
   is an interrupt on the device.

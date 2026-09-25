@@ -243,6 +243,10 @@ static int32_t integrate(GbApu *a, int c, int32_t cyc)
     GbApuChan *ch = &a->ch[c];
     int32_t acc = 0, t = cyc;
     if (!ch->on) return 0;
+    /* A pulse or noise note that has faded to 0 and is not coming back
+       outputs 0 whatever its timer does: stop stepping it. (Most notes end
+       this way rather than being switched off.) */
+    if (c != 2 && !ch->vol && !(ch->env_dir && ch->env_pace)) return 0;
     while (ch->timer <= t) {
         acc += ch->level * ch->timer;
         t -= ch->timer;
@@ -258,6 +262,7 @@ uint32_t gbapu_render(GbApu *a, int16_t *left, int16_t *right, int n)
 {
     uint32_t total = 0;
     uint32_t q = GBAPU_CLOCK / a->rate, r = GBAPU_CLOCK % a->rate;
+    const int32_t inv_q = (int32_t)(65536u / q), inv_q1 = (int32_t)(65536u / (q + 1));
     int i, c;
     for (i = 0; i < n; i++) {
         int32_t cyc = (int32_t)q, l = 0, rr = 0, xl, xr;
@@ -272,8 +277,13 @@ uint32_t gbapu_render(GbApu *a, int16_t *left, int16_t *right, int n)
             if (nr51 & (0x10 << c)) l += v;
             if (nr51 & (1 << c)) rr += v;
         }
-        xl = l * (((nr50 >> 4) & 7) + 1) * GAIN / cyc;
-        xr = rr * ((nr50 & 7) + 1) * GAIN / cyc;
+        /* cyc is q or q+1: its reciprocal (Q16) is precomputed, so no
+           division per sample */
+        {
+            int32_t inv = cyc == (int32_t)q ? inv_q : inv_q1;
+            xl = (int32_t)(((int64_t)l * ((((nr50 >> 4) & 7) + 1) * GAIN) * inv) >> 16);
+            xr = (int32_t)(((int64_t)rr * (((nr50 & 7) + 1) * GAIN) * inv) >> 16);
+        }
         /* DC blocker: the DAC's idle level is not silence. */
         a->hp_l = xl - a->hp_xl + (int32_t)(((int64_t)a->hp_k * a->hp_l) >> 16);
         a->hp_r = xr - a->hp_xr + (int32_t)(((int64_t)a->hp_k * a->hp_r) >> 16);

@@ -97,7 +97,7 @@ static int l_pause(lua_State *L) { (void)L; return post(CHIP_PAUSE, (uint8_t)pd-
 static int l_sfx(lua_State *L) { (void)L; return post(CHIP_SFX, (uint8_t)arg_u8(1, 0), 0, NULL); }
 static int l_sfxstop(lua_State *L) { (void)L; return post(CHIP_SFX_STOP, 0, 0, NULL); }
 static int l_duck(lua_State *L) { (void)L; return post(CHIP_DUCK, (uint8_t)arg_u8(1, 0), (uint8_t)arg_u8(2, 1), NULL); }
-static int l_mute(lua_State *L) { (void)L; return post(CHIP_MUTE, (uint8_t)(arg_u8(1, 0) & 15), 0, NULL); }
+static int l_mute(lua_State *L) { (void)L; return post(CHIP_MUTE, (uint8_t)arg_u8(1, 0), 0, NULL); }
 static int l_hold(lua_State *L) { (void)L; return post(CHIP_HOLD, (uint8_t)arg_u8(1, 255), 0, NULL); }
 static int l_master(lua_State *L) { (void)L; return post(CHIP_VOLUME, (uint8_t)(arg_u8(1, 7) & 7), 0, NULL); }
 
@@ -124,18 +124,22 @@ static int l_status(lua_State *L)
     pd->lua->pushInt(g->order);
     pd->lua->pushInt(g->row);
     pd->lua->pushInt(g->sync);
-    pd->lua->pushInt((g->ch[4].prio ? 1 : 0) | (g->ch[5].prio ? 2 : 0));
+    pd->lua->pushInt((g->ch[GBM_SLOT0].prio ? 1 : 0) | (g->ch[GBM_SLOT1].prio ? 2 : 0));
     pd->lua->pushInt((int)chip->ticks);
     return 6;
 }
 
-/* levels() -> four channel levels 0-15, as the APU is sounding them now:
-   for meters. Racy by design (the audio thread moves them), and harmless:
-   each is one byte. */
+/* levels() -> a level 0-15 per music channel (4, or a format-2 song's
+   voices), as they sound right now: for meters. Racy by design (the audio
+   thread moves them), and harmless: each is one byte. */
 static int l_levels(lua_State *L)
 {
     int c;
     (void)L;
+    if (chip && chip->gbm.v2) {
+        for (c = 0; c < chip->gbm.nv; c++) pd->lua->pushInt(vox_level(&chip->vox, c));
+        return chip->gbm.nv;
+    }
     for (c = 0; c < 4; c++) {
         const GbApuChan *ch = chip ? &chip->apu.ch[c] : NULL;
         int v = 0;

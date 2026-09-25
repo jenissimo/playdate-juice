@@ -30,7 +30,7 @@ from gbm_format import encode_song, sfx_names  # noqa: E402
 
 MUSIC = os.path.join(ROOT, 'chiptune', 'music')
 BUILD = os.path.join(ROOT, 'build')
-CORE = ['chiptune/gbapu.c', 'chiptune/gbm.c', 'chiptune/chip.c']
+CORE = ['chiptune/gbapu.c', 'chiptune/vox.c', 'chiptune/gbm.c', 'chiptune/chip.c']
 
 
 # ─── compiling ────────────────────────────────────────────────────────────
@@ -81,6 +81,25 @@ def compile_c(sources, out):
 
 def renderer():
     return compile_c(['tools/chiptune_render.c'] + CORE, 'chiptune_render')
+
+
+def probe_song():
+    """Every format-2 feature in one bar, for test/chiptune/v2_test.c."""
+    from gbm_compose import Song, sid_kick, sid_snare, sid_hat, sample_voice, synth_kit
+    s = Song('v2 probe', groove=(6, 6), version=2, voices=6, filter=dict(cutoff=120, resonance=10, mode=1))
+    s.voice('pulse', 'lead', volume=12, width=128, pwm=3)
+    s.voice('saw', 'bass', volume=12, filter=True)
+    s.voice('triangle', 'tri', volume=10)
+    sid_kick(s); sid_snare(s); sid_hat(s)
+    sample_voice(s, synth_kit()[0], 'kick808')
+    s.bar(['C5@lead . E5 . G5 . . . C6 . . . G5 . . .',
+           'C2@bass+G1220 . . . C3 . . . G2 . . . C3 . . .',
+           'E4@tri+047 . . . . . . . . . . . . . . .',
+           'C4@skick . . . A3@ssnare . . . C4@skick . C4 . A3@ssnare . . .',
+           'C6@shat . C6 . C6 . C6 . C6 . C6 . C6 . C6 .',
+           'C5@kick808 . . . . . . . C5 . . . . . . .'])
+    s.sfx('blip', 'C6@lead E6 G6 . . . . . -', 7, 1, 2)
+    return s.project()
 
 
 # ─── commands ─────────────────────────────────────────────────────────────
@@ -152,9 +171,15 @@ def cmd_test(args):
                 fails += not ok
                 print(f"  encode {f}: {'matches the original encoder' if ok else 'DIFFERS'}")
         scenarios = sorted(f[:-4] for f in os.listdir(tmp) if f.endswith('.scn'))
-        exe = compile_c(['test/chiptune/trace_test.c', 'chiptune/gbm.c', 'chiptune/gbapu.c'], 'trace_test')
+        exe = compile_c(['test/chiptune/trace_test.c', 'chiptune/gbm.c', 'chiptune/gbapu.c', 'chiptune/vox.c'], 'trace_test')
         r = subprocess.run([exe, tmp] + scenarios)
         fails += r.returncode != 0
+        # Format 2 and vox: there is no original to match, so the promises.
+        probe = os.path.join(tmp, 'probe.gbm')
+        with open(probe, 'wb') as f:
+            f.write(encode_song(probe_song()))
+        exe = compile_c(['test/chiptune/v2_test.c'] + CORE, 'v2_test')
+        fails += subprocess.run([exe, probe]).returncode != 0
     # The shipped songs build and every effect has a name.
     import chiptune_songs
     for name, fn in chiptune_songs.SONGS.items():

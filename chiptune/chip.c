@@ -17,7 +17,8 @@ void chip_init(Chip *c, uint32_t sample_rate)
 {
     memset(c, 0, sizeof *c);
     gbapu_init(&c->apu, sample_rate);
-    gbm_init(&c->gbm, &c->apu);
+    vox_init(&c->vox, sample_rate);
+    gbm_init(&c->gbm, &c->apu, &c->vox);
     gbm_pcm_timer(&c->gbm);
     c->idle = 1;
 }
@@ -67,8 +68,8 @@ void chip_drain(Chip *c)
 static int quiet(const Chip *c)
 {
     const Gbm *g = &c->gbm;
-    return !g->playing && !g->ch[4].prio && !g->ch[5].prio && !g->pcm_active &&
-           !gbapu_active(&c->apu) &&
+    return !g->playing && !g->ch[GBM_SLOT0].prio && !g->ch[GBM_SLOT1].prio && !g->pcm_active &&
+           !gbapu_active(&c->apu) && !vox_active(&c->vox) &&
            c->apu.hp_l < 8 && c->apu.hp_l > -8 && c->apu.hp_r < 8 && c->apu.hp_r > -8;
 }
 
@@ -100,7 +101,7 @@ int chip_render(Chip *c, int16_t *left, int16_t *right, int n)
         if (g->timer_irq && c->timer_cd < next) next = c->timer_cd;
         k = gbapu_samples_for(&c->apu, (uint32_t)next);
         if (k > n) k = n;
-        cyc = gbapu_render(&c->apu, left, right, k);
+        cyc = g->v2 ? vox_render(&c->vox, left, right, k) : gbapu_render(&c->apu, left, right, k);
         if (left) left += k;
         if (right) right += k;
         c->tick_cd -= (int32_t)cyc;
