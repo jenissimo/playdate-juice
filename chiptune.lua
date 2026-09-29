@@ -5,7 +5,9 @@
 -- Songs are tracker projects encoded to small blobs (a few KB for a minute of
 -- music): four channels, instruments with LSDj-style tables, arpeggios,
 -- slides, vibrato, drum samples, and two SFX slots that borrow a channel
--- from the music and give it back.
+-- from the music and give it back. Format 2 goes to 8 SID-style voices;
+-- format 3 adds FastTracker 2's sampler, and its songs carry their samples
+-- (the jungle tracks are 70-95 KB). All load and play the same way here.
 --
 -- This file is the Lua face of it. It needs the C half built into the game
 -- (chiptune/README.md); without it every call is a silent no-op and

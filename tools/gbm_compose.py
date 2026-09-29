@@ -25,6 +25,12 @@ filter. Its extended commands are written with a G-prefixed pair of hex
 digits after `+`: `+G10` cutoff, `+G11` resonance/mode, `+G12` cutoff slide,
 `+G13` filter routing, `+G14` width, `+G15` PWM, `+G16` oscillator,
 `+G17` ring, `+G18` sync -- e.g. `C4@lead+G1480` for a 50% pulse.
+
+Format 3 (Song(..., version=3, bpm=170)) adds FastTracker 2's sampler:
+8-bit samples at their own rates with loops (`load_wav`, `pcm_voice`), and
+FT2's commands under FT2's letters: `+G19xx` sample offset (xx x 256
+frames), `+G1Axy` volume slide, `+G1B01` backwards, `+G1Cxx` volume 0-40
+(hex, 0-64), `+G1Exx` pan position, `+G1Fxx` BPM.
 """
 import math
 import re
@@ -81,11 +87,19 @@ def parse_pattern(text, rows, song=None):
 # ─── a song under construction ────────────────────────────────────────────
 
 class Song:
-    def __init__(self, name, groove=(6, 6), rows=16, loop=0, version=1, voices=4, filter=None):
+    def __init__(self, name, groove=(6, 6), rows=16, loop=0, version=1, voices=4, filter=None, bpm=0, amp=16):
         self.voices = voices if version >= 2 else 4
         self.s = dict(format='gbm-song', version=version, name=name, rows=rows, loop=loop,
                       grooves=[list(groove)], instruments=[], tables=[], waves=[],
                       patterns=[], orders=[], sfx=[])
+        if version >= 3:
+            # FT2's tempo: a tick every 2.5 / bpm s, so a groove of 6 ticks a
+            # row, 4 rows a beat, is `bpm` beats a minute; 0 keeps the
+            # Game Boy's 59.73 Hz frame; `amp` is FT2's amplification in
+            # 16ths, the song's voices only (a sampled mix peaks well under
+            # a chip one: a break is mostly transient)
+            self.s['bpm'] = bpm
+            self.s['amp'] = amp
         if version >= 2:
             self.s['voices'] = voices
             self.s['filter'] = dict(dict(cutoff=255, resonance=0, mode=1), **(filter or {}))
@@ -421,6 +435,98 @@ def sid_tom(song, name='stom', volume=14):
 def sid_hat(song, name='shat', open_=False, volume=7):
     """Bright noise, short or open, metallic (7-bit)."""
     return song.voice('noise', name, volume=volume, envPace=3 if open_ else 1, duty=1)
+
+
+# ─── FT2's sampler (format 3) ──────────────────────────────────────────────
+
+C5_HZ = 131072 / 250        # the Game Boy's C5 (period 1798): 524.288 Hz
+
+
+def note_hz(note):
+    """A note name (A4 = 440 Hz, equal temperament) or a frequency."""
+    if isinstance(note, (int, float)):
+        return float(note)
+    return 440.0 * 2 ** ((parse_note(note) - parse_note('A4')) / 12)
+
+
+def load_wav(path, name=None, rate=None, root=None, loop=None):
+    """An 8- or 16-bit mono WAV as a format-3 sample. Its loop and root come
+    from the file's `smpl` chunk (loop points, MIDI unity note and its
+    fraction) unless given. The rate stored is the one that plays it at its
+    own pitch on its root note, in tune with the other voices: the file's
+    rate x 524.288 / the root's Hz; with no root, the file's rate (C5 plays
+    it as recorded). `rate` overrides all that: a break's rate is what sets
+    its tempo."""
+    import os
+    import struct
+    with open(path, 'rb') as f:
+        data = f.read()
+    if data[:4] != b'RIFF' or data[8:12] != b'WAVE':
+        raise ValueError(f'{path}: not a WAV')
+    at, fmt, frames, smpl = 12, None, None, None
+    while at + 8 <= len(data):
+        cid, size = data[at:at + 4], struct.unpack('<I', data[at + 4:at + 8])[0]
+        body = data[at + 8:at + 8 + size]
+        if cid == b'fmt ':
+            fmt = struct.unpack('<HHIIHH', body[:16])
+        elif cid == b'data':
+            frames = body
+        elif cid == b'smpl':
+            smpl = body
+        at += 8 + size + (size & 1)
+    tag, chans, srate, _, _, bits = fmt
+    if tag != 1 or chans != 1 or bits not in (8, 16):
+        raise ValueError(f'{path}: want 8- or 16-bit mono PCM')
+    if bits == 8:
+        pcm = [b - 128 for b in frames]
+    else:
+        pcm = [max(-128, min(127, round(v / 256))) for v in struct.unpack(f'<{len(frames) // 2}h', frames)]
+    if smpl is not None and len(smpl) >= 36:
+        unity, frac = struct.unpack('<II', smpl[12:20])
+        if root is None:
+            root = 440.0 * 2 ** ((unity + frac / 2 ** 32 - 69) / 12)
+        if loop is None and struct.unpack('<I', smpl[28:32])[0] and len(smpl) >= 60:
+            start, end = struct.unpack('<II', smpl[44:52])
+            loop = (start, end - start + 1)
+    if rate is None:
+        rate = round(srate * C5_HZ / note_hz(root)) if root is not None else srate
+    return dict(name=name or os.path.splitext(os.path.basename(path))[0], pcm=pcm, rate=int(rate),
+                loop=list(loop) if loop else None)
+
+
+def save_wav(path, pcm, rate, root=None, loop=None):
+    """Writes 8-bit signed frames as an 8-bit mono WAV (what FT2 loads), with
+    a `smpl` chunk for the root note (MIDI, with its fraction) and the loop,
+    so load_wav -- or any sampler -- reads them back."""
+    import math
+    import struct
+    data = bytes((int(v) + 128) & 255 for v in pcm)
+    chunks = [b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, rate, rate, 1, 8),
+              b'data' + struct.pack('<I', len(data)) + data + (b'\0' if len(data) & 1 else b'')]
+    if root is not None or loop:
+        midi = 69 + 12 * math.log2(note_hz(root) / 440.0) if root is not None else 60.0
+        unity = int(math.floor(midi))
+        frac = min(0xFFFFFFFF, int(round((midi - unity) * 2 ** 32)))
+        body = struct.pack('<IIIIIIIII', 0, 0, round(1e9 / rate), unity, frac, 0, 0, 1 if loop else 0, 0)
+        if loop:
+            body += struct.pack('<IIIIII', 0, 0, loop[0], loop[0] + loop[1] - 1, 0, 0)
+        chunks.append(b'smpl' + struct.pack('<I', len(body)) + body)
+    riff = b'WAVE' + b''.join(chunks)
+    with open(path, 'wb') as f:
+        f.write(b'RIFF' + struct.pack('<I', len(riff)) + riff)
+
+
+def pcm_voice(song, sample, name, volume=15, level=64, **o):
+    """Format 3: a sampler instrument. `volume` is the envelope's (0-15,
+    with envPace for a fade), `level` the channel volume a note starts at
+    (0-64, FT2's; a row's +G1Cxx overrides it)."""
+    samples = song.s.setdefault('samples', [])
+    names = [x['name'] for x in samples]
+    if sample['name'] not in names:
+        samples.append(sample)
+        names.append(sample['name'])
+    return song.voice('pcm', name, volume=volume, envPace=o.pop('envPace', 0), level=level,
+                      sample=names.index(sample['name']), **o)
 
 
 def sample_inst(song, sample, name, volume=0, noise_volume=None, **o):

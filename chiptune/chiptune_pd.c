@@ -16,17 +16,57 @@ static SoundSource *source;
 static uint8_t *blobs[MAX_BLOBS];
 static int nblobs;
 
+/* The rate the chip renders at. 44100 is the output's own. A game short of
+   CPU can build with -DCHIPTUNE_RATE=22050: the chip then does half the
+   work and each sample is doubled on the way out (linearly), which the
+   Playdate's speaker cannot tell apart; headphones hear the top above
+   11 kHz go. */
+#ifndef CHIPTUNE_RATE
+#define CHIPTUNE_RATE 44100
+#endif
+
+#if CHIPTUNE_RATE == 44100
 static int render(void *ctx, int16_t *left, int16_t *right, int len)
 {
     return chip_render((Chip *)ctx, left, right, len);
 }
+#else
+static int16_t half_prev_l, half_prev_r;
+
+static int render(void *ctx, int16_t *left, int16_t *right, int len)
+{
+    int16_t hl[64], hr[64]; /* on the audio thread's stack: keep it small */
+    int any = 0, off = 0;
+    while (off < len) {
+        int m = (len - off + 1) / 2, i;
+        if (m > 64) m = 64;
+        if (!chip_render((Chip *)ctx, hl, right ? hr : NULL, m)) {
+            for (i = 0; i < m; i++) hl[i] = hr[i] = 0;
+        } else {
+            any = 1;
+        }
+        for (i = 0; i < m && off + 2 * i < len; i++) {
+            left[off + 2 * i] = (int16_t)((half_prev_l + hl[i]) >> 1);
+            if (off + 2 * i + 1 < len) left[off + 2 * i + 1] = hl[i];
+            half_prev_l = hl[i];
+            if (right) {
+                right[off + 2 * i] = (int16_t)((half_prev_r + hr[i]) >> 1);
+                if (off + 2 * i + 1 < len) right[off + 2 * i + 1] = hr[i];
+                half_prev_r = hr[i];
+            }
+        }
+        off += 2 * m;
+    }
+    return any;
+}
+#endif
 
 static int ensure(void)
 {
     if (chip) return 1;
     chip = pd->system->realloc(NULL, sizeof *chip);
     if (!chip) return 0;
-    chip_init(chip, 44100);
+    chip_init(chip, CHIPTUNE_RATE);
     source = pd->sound->addSource(render, chip, 1);
     return source != NULL;
 }
@@ -53,8 +93,9 @@ static int post(uint8_t op, uint8_t a, uint8_t b, const uint8_t *blob)
 }
 
 /* load(bytes) -> id | nil, error. The blob is copied and kept: songs are
-   small (a few KB) and the audio thread may be reading one at any moment,
-   so nothing is ever freed from under it. */
+   small (a few KB; a format-3 song with its samples, up to ~100 KB) and the
+   audio thread may be reading one at any moment, so nothing is ever freed
+   from under it. */
 static int l_load(lua_State *L)
 {
     size_t len = 0;

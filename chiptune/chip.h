@@ -11,7 +11,19 @@
    That puts the driver on the audio thread (an interrupt, on the device).
    The game talks to it through a single-producer queue drained at the top of
    each render, so no call from the game ever races the driver. Reads
-   (position, sync) are single bytes and safe from anywhere. */
+   (position, sync) are single bytes and safe from anywhere.
+
+   A format-3 song with a tempo (FT2's BPM) ticks its music on a clock of
+   its own, music_cd, every g->tick_cycles; the frame tick goes on for the
+   effects and the ducking.
+
+   A tick does not cut the render short where it falls: it waits for the
+   next quantum -- the largest power of two samples under CHIP_TICK_LATE_US,
+   32 at 22050 Hz, 64 at 44100 -- so vox renders whole blocks rather than
+   slivers between ticks. A tick is then up to 1.5 ms late, never early, and
+   the clocks keep their exact rate (the lateness is not carried forward).
+   The drum-sample timer keeps its exact time: it feeds the wave channel.
+   Build with -DCHIP_TICK_LATE_US=0 for ticks to the sample. */
 #ifndef CHIP_H
 #define CHIP_H
 #include "gbm.h"
@@ -28,11 +40,16 @@ typedef struct {
 
 #define CHIP_QUEUE 64
 
+#ifndef CHIP_TICK_LATE_US
+#define CHIP_TICK_LATE_US 1500
+#endif
+
 typedef struct {
     GbApu apu;                      /* format 1: the exact DMG */
     Vox vox;                        /* format 2 (and anything mixed with it) */
     Gbm gbm;
-    int32_t tick_cd, timer_cd;
+    int32_t tick_cd, timer_cd, music_cd;
+    int quantum;                    /* samples a tick may wait for, a power of two */
     ChipCmd queue[CHIP_QUEUE];
     volatile uint32_t head, tail;   /* head: the game's; tail: the audio's */
     volatile uint8_t idle;          /* nothing to play: the last render was silent */

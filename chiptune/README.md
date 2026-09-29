@@ -1,7 +1,8 @@
 # chiptune
 
 Game Boy music and sound effects for Playdate, from a real tracker driver --
-and an extended mode that goes past the Game Boy: up to 8 voices, SID-style.
+and an extended mode that goes past the Game Boy: up to 8 voices, SID-style;
+and a third that is FastTracker 2's sampler, for music made of samples.
 
 The engine is **GBM**, a tracker music/SFX driver written for the original Game
 Boy (instruments with LSDj-style tables, arpeggios, slides, vibrato, two SFX
@@ -21,8 +22,16 @@ callback, on one of two synths:
   modulation, ring modulation, hard sync, and one resonant multimode filter.
   Pitch and envelopes keep the Game Boy's semantics, so everything else --
   rows, commands, tables, SFX, ducking -- is the same driver.
+- **vox's sampler**, for **format 3**: format 2 plus FastTracker 2's way of
+  making music from samples -- 8-bit samples of any length at their own
+  rates, looped or not, resampled to the note; FT2's sample offset, volume
+  and volume slide, pan position; backwards play; and a tempo in BPM, the
+  music ticking on a clock of its own. It is what 90s tracker game
+  soundtracks were made of, and what the jungle tracks are: one break
+  chopped by sample offset, retriggered into rolls, pitched, reversed.
 
-Songs are tiny: the demo songs are 0.2-3.4 KB each.
+Songs are tiny: the chip songs are 0.2-3.6 KB each. A format-3 song carries
+its samples: the jungle tracks are 70-95 KB.
 
 ```
 chiptune/
@@ -34,8 +43,10 @@ chiptune/
   chiptune_main.c     a stand-in eventHandler for games with no C of their own
   chiptune.cmake      the source list for a Playdate CMake project
   music/              the demo songs and the SFX library, encoded
+  samples/            the jungle tracks' samples, 8-bit WAVs, and their CREDITS.md
 chiptune.lua          the Lua module (repo root, like the other modules)
 tools/chiptune.py     build the songs, encode, render, benchmark, run the tests
+tools/jungle_kit.py   synthesise samples/ (numpy); the songs need only the WAVs
 ```
 
 ## Using it from Lua
@@ -87,7 +98,8 @@ Channels to `mute` are numbers 1-8 or `"pu1" "pu2" "wav" "noi"`. Without the C
 extension `Chiptune.available` is false and every call is a no-op.
 
 **Which synth plays.** gbapu while everything loaded is format 1, so a Game
-Boy song is exactly a Game Boy; vox as soon as anything loaded is format 2.
+Boy song is exactly a Game Boy; vox as soon as anything loaded is format 2
+or 3.
 The shipped SFX bank is format 2, so with it loaded the Game Boy songs play on
 vox too, which renders the same channels with the same pitches and envelopes
 (with band-limited pulses rather than the DMG's aliasing). A game that wants
@@ -97,20 +109,51 @@ the exact DMG loads a format-1 SFX bank or none.
 Boy's VBlank. Ticked from a 30 fps `playdate.update`, every song would play at
 half speed and every slow frame would stumble. So `chip_render` runs the
 driver's tick and the drum-sample timer between the samples it renders, in
-emulated CPU cycles, and the game's calls reach it through a queue.
+emulated CPU cycles, and the game's calls reach it through a queue. A tick
+waits for the next quantum of samples rather than cutting the render short
+where it falls -- up to 1.5 ms late, never early, the clocks' rate exact --
+so the synth renders whole blocks, not slivers between ticks.
 
-**What it costs.** About 18 KB of code on the device. `python tools/chiptune.py
+**What it costs.** About 22 KB of code on the device (format 3 added about 4). `python tools/chiptune.py
 render song.gbm x.wav --bench` times the callback. On a desktop core: 21-27 ns
 a sample for a Game Boy song on gbapu, 32 ns for a 6-voice format-2 song on
 vox. From that, a Cortex-M7 at 168 MHz should spend roughly 5-12% of a core --
 an estimate, not a measurement on hardware. The render is shaped for that CPU:
-single-precision float only, no division per sample, vox works in 32-sample
+single-precision float only, no division per sample, vox works in 64-sample
 blocks a voice at a time with one tight loop per oscillator, envelopes and
 sweeps are stepped per block, and a note that has faded to silence is skipped
 rather than computed. Nothing is rendered while nothing plays.
 
+On the device the arithmetic is not all of it. The game's heap is external
+RAM behind a small write-through cache: a store to it that is not part of a
+run is a slow trip, and the audio callback's code and data are often cold
+when it starts. So the renderer keeps each voice's moving parts -- position,
+phase, gains, envelope count -- in locals on the stack (fast internal RAM)
+for a whole call and writes back only what changed, once, in one run (they
+lead `VoxVoice` for that); the driver's per-frame restatements (ducking)
+store nothing when nothing changed; and fewer, fuller blocks mean fewer
+passes over the voices.
+
+A sampler voice is cheaper than a band-limited pulse: two 8-bit loads, an
+interpolation in integers, one conversion to float and two multiply-adds a
+sample, its position 20.12 fixed point, the block cut at the sample's (or
+loop's) end so the inner loop tests nothing -- one division per segment,
+not per sample. Measured on one machine, best of three 10-minute renders
+with the SFX bank loaded: the format-2 songs 12-20 ns a sample, the same
+before and after format 3 was added (within 2%); the 7-voice jungle tracks
+11.4-12.3 ns.
+
+**Tuning.** Three compile-time knobs, for a game that must trade:
+
+| | default | |
+|---|---|---|
+| `CHIPTUNE_RATE` | 44100 | the rate the chip renders at (`chiptune_pd.c`). 22050 renders half the samples and doubles each on the way out -- the speaker cannot tell; headphones lose the top above 11 kHz. |
+| `VOX_BLOCK` | 64 | samples a block. The block buffers live on the audio callback's stack, about 26 bytes a sample of block; at 64 the renderer's chain (the callback, `chip_render`, `vox_render`) takes about 2.8 KB of it on the device, 1.5 KB at 32. Smaller: less stack, more per-block work; envelope steps and gain ramps land to the block. |
+| `CHIP_TICK_LATE_US` | 1500 | how late a tick may be to fall on a block boundary: the quantum is the largest power of two samples under it (32 at 22050 Hz, 64 at 44100). 0: ticks to the sample, as a render once was. |
+
 **pdc copies everything.** A submodule inside `Source/` brings the C sources,
-tools and test fixtures into the `.pdx` too: about 300 KB of dead weight.
+tools and test fixtures into the `.pdx` too: about 300 KB of dead weight, and
+`samples/` (which pdc turns into .pda files) another 156 KB.
 `pdc -k` (`--skip-unknown`) would leave those out, but it would leave out the
 `.gbm` songs as well, since pdc does not know that type either. If the 300 KB
 matters, copy just the `.gbm` files you use into your own `Source/` instead of
@@ -144,9 +187,13 @@ Each is a style and a set of chiptune techniques.
 | `neon_acid.gbm` | acid house, A minor, 128 BPM, house swing | 2, 6 voices | the 303: a saw through a screaming low-pass whose cutoff each note sweeps down through its table, accents, slides sized to each jump (3-7 frames) that do not restart the filter; the build: closed then open tables and more resonance, a two-bar break without the kick, a clap roll; kick driven for the speaker; PWM stabs in opposite directions |
 | `victory.gbm` | fanfare | 2, 5 voices | PWM brass in two parts, the lead articulated; a pulse bass walking up; a SID snare roll; a song that ends (`onEnd`) |
 | `fade_out.gbm` | game over | 1 (DMG) | a slow fall over a chromatic bass, sighs of chord tones under it, F minor borrowed at the end |
+| `jungle_ride.gbm` | 90s jungle, E minor, 170 BPM, 1:53 (loop from 0:11) | 3, 7 voices, 94 KB | one break at 23211 Hz (a 16th is 2048 frames, sample offset 8n), chopped per row: as played, edits, ghost doubles, pitched kicks, stutters, 32nd rolls by retrigger, a snare backwards into the downbeat; the intro's break through the resonant low-pass opening over 8 bars; a sampled reese swept a bar at a time, walking down into each chord, resting so the engine keeps its band; open-fifth pads in parallel, faded in by volume slide; a pulse hook echoed in its own channel; minor-seventh stabs on each chord's relative; the crash backwards as the swell into each section; E01 at the first drop, E02 at the breakdown |
+| `jungle_race.gbm` | harder, G minor, 176 BPM, 1:27 (loop from 0:05) | 3, 7 voices, 88 KB | a tighter break (a cracking snare, tambourine) at 24030 Hz, chopped harder: stutters, rolls swelling by volume slide, slices up a fourth and a fifth; a hoover swooping into each note and sliding between them by portamento; the reese more resonant, staccato; a pulse arpeggio in 16ths; a break of the reese alone, its resonance up |
+| `jungle_menu.gbm` | calm jungle, A minor, 164 BPM, 0:53 (loop from 0:06) | 3, 6 voices, 69 KB | the ride's break, slower and lower at 22391 Hz, mostly as played, with ghost edits and a half-time section; pads in parallel; a warm saw bass through the low-pass gliding by portamento; a triangle flute with delayed vibrato and its echo; a pulse bell; 6 voices, so the SFX take nothing |
 
 The songs are code, in `tools/chiptune_songs.py`; `python tools/chiptune.py
-songs` rebuilds `music/`.
+songs` rebuilds `music/`. The jungle tracks' samples are made from nothing
+by `tools/jungle_kit.py` (no recordings; `samples/CREDITS.md`).
 
 ## The SFX library
 
@@ -175,7 +222,13 @@ It is a format-2 bank on voices 6 and 7: every Game Boy song and every
 format-2 song of up to 6 voices keeps all of its own channels -- an effect
 steals nothing and the music only ducks. The interface is on voice 7 at
 priority 1, so a menu blip never cuts a gameplay sound. A stronger effect
-takes a slot from a weaker one; a weaker one is dropped.
+takes a slot from a weaker one; a weaker one is dropped. The 7-voice jungle
+tracks lend their seventh voice -- stabs and crashes -- to gameplay effects.
+A format-3 voice given back (by an effect, by `mute`, after a pause) waits
+for its next note if it was playing a one-shot sample, rather than replaying
+a stab or a slice of the break from its start mid-bar; a looped sample or a
+synth voice comes back at once, as on the Game Boy. An effect is never
+amplified with the song (below).
 
 ## Writing music
 
@@ -222,6 +275,15 @@ the old kick's energy there, and the songs' basses 1.4 to 2 times what they had.
 held sustain, and a scoop up into the pitch -- which is most of what makes a
 chip lead sound played rather than switched on.
 
+In a game the speaker is shared. A racing game's engine drone fires at
+40-250 Hz, so the jungle tracks leave that band to it: the
+reese sample has its fundamental turned down (its weight is in harmonics 2-6)
+and plays with rests, the triangle sub only marks downbeats and fades in a
+third of a second, the pads are high-passed above 160 Hz, the breakdowns
+drop the bass for bars at a time. Measured over a whole render, 15-30% of
+their energy is in 60-250 Hz, against 47-60% for `jungle_pulse` and
+`neon_acid`.
+
 ### Channels
 
 Format 1: four fixed channels.
@@ -242,6 +304,9 @@ Format 2: 1-8 voices, any instrument on any voice. The oscillators:
 | `noise` | the DMG's LFSR | 8 = 7-bit (metallic) |
 | `sample` | 4-bit PCM, 8192 Hz at C5, follows the note | -- |
 | `triangle`, `saw` | band-limited (saw), smooth | -- |
+
+Format 3 adds `pcm` (6): an 8-bit sample at its own rate, following the
+note, with a loop and a start offset, forwards or backwards (below).
 
 Every oscillator takes a full 0-15 envelope. `ring` multiplies a voice by the
 previous voice's square and `sync` restarts it with the previous voice: a
@@ -288,6 +353,62 @@ Format 2 adds, written `+Gccvv`:
 Any of them, and any pattern command, can sit in a table's command column: a
 filter envelope per note is a table of `G10` cutoffs (`neon_acid`).
 
+Format 3 adds FastTracker 2's commands, under FT2's letters:
+
+| | | |
+|---|---|---|
+| `G19xx` | sample offset (FT2 `9xx`) | the row's note starts xx x 256 frames in; its retriggers (`9xy`) start there too |
+| `G1Axy` | volume slide (FT2 `Axy`) | x up, y down, a step a tick from the note's own tick, 0-64; holds until `00` or the next note |
+| `G1B01` | backwards | the row's note plays backwards: from its offset, or from the end |
+| `G1Cxx` | volume (FT2 `Cxx`, the volume column) | 0-40 hex (0-64): on a note's row it is that note's; on its own it turns the sounding note down or up |
+| `G1Exx` | pan position (FT2 `8xx`) | 0 left, 80 centre, FF right: a sampler voice; `8xx` still routes |
+| `G1Fxx` | BPM (FT2 `Fxx` above 1F) | the music's tick every 2.5 / xx s; `00` back to the Game Boy's frame |
+
+As in FT2 a note takes its instrument's volume unless its row sets one,
+and an offset, a direction or a volume on a row belongs to that row's note
+(a delayed one, `7xx`, keeps them).
+
+### Format 3: FastTracker 2's sampler
+
+```python
+from gbm_compose import Song, load_wav, pcm_voice
+
+s = Song('Break', groove=(6,), version=3, voices=4, bpm=170, amp=32)
+brk = load_wav('chiptune/samples/break_a.wav', rate=round(2048 * 170 / 15))  # a 16th = 2048 frames
+pcm_voice(s, brk, 'brk', level=64)
+pcm_voice(s, load_wav('chiptune/samples/reese.wav'), 'reese', level=28, filter=True)
+s.bar(['C5@brk+G1900 . . . C5+G1920 . . . C5+G1900 . C5+G1910 . C5+G1920 . . C5+G1960+904',
+       'E2@reese+G1070+G1201 . . . . . . . .+G12FF . E2 . - . G2 .', '.', '.'])
+```
+
+A **sample** is 8-bit signed frames at the rate it plays at on C5: a note
+resamples it (linear interpolation), in tune with the other voices, so a
+sample recorded at its root plays at its pitch on that note. `load_wav`
+reads an 8- or 16-bit mono WAV and its `smpl` chunk (root note, loop) --
+what any sampler or audio editor writes -- and works that rate out; `rate=`
+overrides it. A break's rate is its tempo: `tools/jungle_kit.py` records
+each break one bar long with a 16th every 2048 frames, so at `2048 x BPM /
+15` Hz its 16ths land on the song's and 16th n is offset `8n` (FT2's
+9xx counts 256 frames). A faster song plays the same break higher, as a
+tracker musician's did. `chops()` in `chiptune_songs.py` writes a bar of
+slices, rolls, pitches and reversals from one line.
+
+The **tempo**: `bpm` gives the music a tick every 2.5 / BPM seconds, FT2's
+rule, so 6 ticks a row and 4 rows a beat is BPM beats a minute, exactly --
+on the Game Boy's fixed 59.73 Hz frame 170 BPM is a groove of 5-5-5-6
+frames, the 16ths up to 13 ms apart. The effects keep the frame, so they
+sound the same over every song.
+
+**Amplification** (`amp`, FT2's, in 16ths): a mix of samples peaks well
+below a chip one -- a break is mostly transient -- so a format-3 song may
+raise its own voices; its effects stay as they are. The jungle tracks use
+32-38 (x2-x2.4): -16 to -19 dBFS RMS, peaks at -1.8 to -2.5, the soft knee
+touched by 0.002% of the samples.
+
+A sampled note that is cut or retriggered does not stop dead: its last level
+fades in about a millisecond (a chopped break retriggers a voice every row),
+and a volume change ramps over a block (1.5 ms at 44.1 kHz).
+
 ### Instruments and tables
 
 An instrument sets the starting duty or wave, the envelope, the sweep, an
@@ -318,7 +439,7 @@ All offsets are u16 little-endian from the start of the blob, so a blob plays
 from wherever it is loaded.
 
 ```
-0   'G' 'B' v        magic, format (1 or 2)
+0   'G' 'B' v        magic, format (1, 2 or 3)
 3   rows             per pattern (1-255)
 4   order_count
 5   loop_order       0xFF: stop at the end
@@ -336,7 +457,20 @@ from wherever it is loaded.
 22  samples          u16 x n -> format 1: [blocks, blocks x 16 bytes (CH3 frames)]
                                 format 2: [u16 count, count 4-bit samples, high nibble first]
 24  filter           format 2: cutoff, resonance << 4 | mode
+26  samples          format 3: how many
+27  bpm              format 3: 0 is the Game Boy's frame
+28  amp              format 3: the song's voices x amp / 16 (0 is 16)
+29  0
 ```
+
+Format 3 changes three things. An instrument's byte 13 is its volume
+(0-64). A sample-table entry points to a 24-byte header -- flags (1: loop),
+3 spare, then u32 each: rate at C5, data offset, frames, loop start, loop
+length -- and the frames lie after everything else, past the 64 KB the rest
+of the blob is addressed in: signed 8-bit, then one guard frame (the loop
+start's, or a repeat of the last) for the interpolation. A sample is at most
+2^19 frames. `gbm_check` holds every sample to the blob, since the audio
+thread reads them at u32 offsets.
 
 A pattern stream, per row: `[instrument] [command...]` then a note (`0x00-0x5F`),
 `0x60` note off, `0x61` end of an SFX, or `0x80+n` (this row and n more are
@@ -349,13 +483,26 @@ names: `count { len bytes }*`, then the u16 length of that, then `NM`.
 ## Tests
 
 ```bash
-python tools/chiptune.py test    # format 1 against the original ROM, format 2 and vox, the encoder, the songs
+python tools/chiptune.py test    # format 1 against the original ROM, formats 2 and 3, the encoder, the songs
 lua test/run.lua                 # chiptune.lua, among the rest
 ```
+
+`test/chiptune/v3_test.c` holds format 3 to its promises on a probe song
+`chiptune.py` builds: a sample at its rate on C5 and an octave up, one-shot
+and loop, offsets and backwards by the level of a staircase sample, volume,
+pan, the ramp, the declick on a cut and on a retrigger, the BPM clock
+(8 rows in 0.8 s, then twice as fast) while the effects keep 59.73 Hz, the
+volume column, slides, a delayed note keeping its offset, an effect's
+volume and its length, voices given back by an effect, a mute or a pause
+(a one-shot waits for its next note, a loop is back at once), and
+`gbm_check` refusing damaged samples.
 
 ## Credits
 
 GBM, its song format, the tracker it comes from, the drum recipes and the wave
 synth are from gameboy-lab (jenissimo). The drum techniques follow the LSDj
 manual, its wiki and lsdpatch, as that project documents; the extended mode
-borrows its ideas from the MOS 6581 SID.
+borrows its ideas from the MOS 6581 SID; format 3 its commands and semantics
+from FastTracker 2. Every sample in `samples/` is synthesised by
+`tools/jungle_kit.py`: no recordings, no third-party audio
+(`samples/CREDITS.md`).

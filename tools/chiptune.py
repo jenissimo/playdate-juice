@@ -7,6 +7,10 @@
     python tools/chiptune.py render-all DIR [--adpcm] [--rate 22050]
     python tools/chiptune.py test                  the C port against the original ROM, and the encoder
 
+The jungle tracks' samples (chiptune/samples/*.wav) are made by
+tools/jungle_kit.py, which needs numpy; building the songs needs only the
+WAVs.
+
 render, render-all and test compile tools/chiptune_render.c or
 test/chiptune/trace_test.c with whatever C compiler is at hand: cc, gcc or
 clang on PATH, or MSVC found through vswhere. Binaries go to build/ (ignored).
@@ -102,6 +106,30 @@ def probe_song():
     return s.project()
 
 
+def probe3_song():
+    """Format 3's sampler and commands, for test/chiptune/v3_test.c: a
+    staircase sample (16 blocks of 256 frames, block b at -120 + 16b) whose
+    level says where it is playing, and a looped sine. 125 BPM, 5 ticks a
+    row: 50 ticks, 10 rows a second; order 1 goes to 250 BPM. Amplified
+    by 24/16."""
+    from gbm_compose import Song, pcm_voice
+    import math
+    stair = dict(name='stair', pcm=[-120 + 16 * (i >> 8) for i in range(4096)], rate=8192, loop=None)
+    sine = dict(name='sine', pcm=[round(100 * math.sin(2 * math.pi * i / 64)) for i in range(1024)],
+                rate=8192, loop=[0, 1024])
+    s = Song('v3 probe', groove=(5,), version=3, voices=4, bpm=125, amp=24)
+    pcm_voice(s, stair, 'stair')
+    pcm_voice(s, sine, 'sine', level=48)
+    s.bar(['C5@stair+G1904 . . . C5+G1B01 . . . C5+G1904+G1B01 . . . C5 . . .',
+           'C5@sine . .+G1C10 . C5+G1C18 . C5 . C5+G1A04 . . . C5+G1E00 . . .',
+           'C5@stair+G1908+902 . . . . . . . C5+G1906+704 . . . . . . .',
+           '.'])
+    s.bar(['.+G1FFA', '.', '.', '.'])
+    s.sfx('steal', 'C6@sine C6 C6 -', 2, 1, 2)       # takes voice 3, which the song plays
+    s.sfx('steal2', 'C6@stair C6 -', 1, 1, 2)        # and voice 2, a looped sample
+    return s.project()
+
+
 # ─── commands ─────────────────────────────────────────────────────────────
 
 def cmd_songs(args):
@@ -180,6 +208,12 @@ def cmd_test(args):
             f.write(encode_song(probe_song()))
         exe = compile_c(['test/chiptune/v2_test.c'] + CORE, 'v2_test')
         fails += subprocess.run([exe, probe]).returncode != 0
+        # Format 3: the sampler and FT2's commands, with the shipped SFX bank.
+        probe = os.path.join(tmp, 'probe3.gbm')
+        with open(probe, 'wb') as f:
+            f.write(encode_song(probe3_song()))
+        exe = compile_c(['test/chiptune/v3_test.c'] + CORE, 'v3_test')
+        fails += subprocess.run([exe, probe, os.path.join(MUSIC, 'sfx.gbm')]).returncode != 0
     # The shipped songs build and every effect has a name.
     import chiptune_songs
     for name, fn in chiptune_songs.SONGS.items():

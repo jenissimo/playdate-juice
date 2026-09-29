@@ -15,11 +15,14 @@
 
 void chip_init(Chip *c, uint32_t sample_rate)
 {
+    uint32_t late = (uint32_t)((uint64_t)sample_rate * CHIP_TICK_LATE_US / 1000000u);
     memset(c, 0, sizeof *c);
     gbapu_init(&c->apu, sample_rate);
     vox_init(&c->vox, sample_rate);
     gbm_init(&c->gbm, &c->apu, &c->vox);
     gbm_pcm_timer(&c->gbm);
+    c->quantum = 1;
+    while ((uint32_t)c->quantum * 2 <= late) c->quantum *= 2;
     c->idle = 1;
 }
 
@@ -76,37 +79,63 @@ static int quiet(const Chip *c)
 int chip_render(Chip *c, int16_t *left, int16_t *right, int n)
 {
     Gbm *g = &c->gbm;
+    const int q = c->quantum;
+    int32_t tick_cd, timer_cd, music_cd;
     chip_drain(c);
     if (quiet(c)) {
         c->idle = 1;
         return 0;
     }
-    c->idle = 0;
+    if (c->idle) c->idle = 0;
+    /* the countdowns in locals for the call, stored once at the end */
+    tick_cd = c->tick_cd;
+    timer_cd = c->timer_cd;
+    music_cd = c->music_cd;
     while (n > 0) {
         int32_t next;
         int k;
         uint32_t cyc;
-        while (c->tick_cd <= 0) {
+        while (tick_cd <= 0) {
             gbm_tick(g);
             c->ticks++;
-            c->tick_cd += GBM_FRAME_CYCLES;
+            tick_cd += GBM_FRAME_CYCLES;
             /* a drum sample started: its first block played inside the tick */
-            if (g->timer_restart) { g->timer_restart = 0; c->timer_cd = GBM_TIMER_CYCLES; }
+            if (g->timer_restart) { g->timer_restart = 0; timer_cd = GBM_TIMER_CYCLES; }
         }
-        while (g->timer_irq && c->timer_cd <= 0) {
+        /* a format-3 tempo: the music's own clock (it may change, or stop,
+           inside a tick: tick_cycles is read afresh each time) */
+        while (g->tick_cycles && music_cd <= 0) {
+            gbm_tick_music(g);
+            music_cd += (int32_t)g->tick_cycles;
+        }
+        if (!g->tick_cycles) music_cd = 0;
+        while (g->timer_irq && timer_cd <= 0) {
             gbm_pcm_isr(g);
-            c->timer_cd += GBM_TIMER_CYCLES;
+            timer_cd += GBM_TIMER_CYCLES;
         }
-        next = c->tick_cd;
-        if (g->timer_irq && c->timer_cd < next) next = c->timer_cd;
+        /* up to the next tick, rounded up to whole quanta (chip.h); up to
+           the drum-sample timer exactly */
+        next = tick_cd;
+        if (g->tick_cycles && music_cd < next) next = music_cd;
         k = gbapu_samples_for(&c->apu, (uint32_t)next);
+        k = (k + q - 1) & ~(q - 1);
+        if (g->timer_irq) {
+            int kt = gbapu_samples_for(&c->apu, (uint32_t)timer_cd);
+            if (kt < k) k = kt;
+        }
         if (k > n) k = n;
         cyc = g->v2 ? vox_render(&c->vox, left, right, k) : gbapu_render(&c->apu, left, right, k);
         if (left) left += k;
         if (right) right += k;
-        c->tick_cd -= (int32_t)cyc;
-        c->timer_cd -= (int32_t)cyc;
+        tick_cd -= (int32_t)cyc;
+        /* the drum timer only counts while it runs (starting it reloads it),
+           so an idle one never wraps */
+        if (g->timer_irq) timer_cd -= (int32_t)cyc;
+        if (g->tick_cycles) music_cd -= (int32_t)cyc;
         n -= k;
     }
+    c->tick_cd = tick_cd;
+    c->timer_cd = timer_cd;
+    c->music_cd = music_cd;
     return 1;
 }
