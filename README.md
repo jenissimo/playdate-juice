@@ -12,7 +12,7 @@ plus a C extension (`chiptune/`).
 |---|---|---|
 | `transitions.lua` | `Transitions` | 23 direction-aware scene transitions + a scene-hop plan |
 | `jukebox.lua` | `Jukebox` | streamed music: crossfades, ducking, pause handling |
-| `chiptune.lua` + `chiptune/` | `Chiptune` | tracker music and SFX: a C port of a real Game Boy driver, plus an 8-voice SID-style mode; 9 songs, 84 effects |
+| `chiptune.lua` + `chiptune/` | `Chiptune` | tracker music and SFX: a C port of a real Game Boy driver, plus an 8-voice SID-style mode and FastTracker 2's sampler; 12 songs, 84 effects |
 | `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs — zero per-frame allocation |
 | `shake.lua` | `Shake` | trauma-based screen shake with deterministic noise |
 | `particles.lua` | `Particles` | pooled 1-bit particle system |
@@ -119,11 +119,15 @@ rate. Two formats: format 1 is four Game Boy channels on an emulated DMG APU,
 held to the original driver write for write (173,000 APU writes match the
 original ROM's in an emulator); format 2 goes past the Game Boy with up to 8
 voices, an oscillator per instrument that a table can switch frame by frame
-(SID drums), PWM, ring modulation, hard sync and a resonant filter. It ships
-with nine songs, each a style and a set of chiptune techniques -- sampled and
+(SID drums), PWM, ring modulation, hard sync and a resonant filter; format 3
+adds FastTracker 2's sampler -- 8-bit samples at their own rates, sample
+offset, volume column, pan, backwards play, a tempo in BPM. It ships with
+twelve songs, each a style and a set of techniques -- sampled and
 synthesised drums, arpeggio chords, a 303 acid line, a sync lead, a
-ring-modulated bell, a reese bass, tremolo by retrigger -- and an 84-effect SFX
-library (a set of game sounds, and a whoosh each way for every transition), all written as code you can read and change.
+ring-modulated bell, a reese bass, tremolo by retrigger, and three 90s jungle
+tracks with breaks chopped by sample offset -- and an 84-effect SFX library
+(a set of game sounds, and a whoosh each way for every transition), all
+written as code you can read and change.
 
 It needs its C half built into the game (a few lines of CMake). Without it,
 `tools/chiptune.py render-all` turns the same music into ADPCM files for
@@ -185,7 +189,7 @@ not on PATH.
 
 ```bash
 lua test/run.lua                # expect "N checks, 0 failures"
-python tools/chiptune.py test   # the C port against the original ROM, the encoder, the songs
+python tools/chiptune.py test   # the C port against the original ROM, formats 2 and 3, the encoder, the songs
 ```
 
 ## License
