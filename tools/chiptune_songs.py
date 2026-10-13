@@ -4,8 +4,9 @@
 
 Each song is a style and a set of chiptune techniques; the docstrings say
 which. Three are format 1 -- four Game Boy channels, exactly what a DMG
-would play -- and the rest format 2, with more voices, oscillators per
-instrument, PWM, sync, ring modulation and a filter.
+would play -- six format 2, with more voices, oscillators per instrument,
+PWM, sync, ring modulation and a filter, and the three jungle tracks
+format 3: FastTracker 2's sampler, with breaks chopped by sample offset.
 
 Mixed for the speaker as well as for headphones: a speaker the size of the
 Playdate's plays little below a few hundred Hz, so every part that has to
@@ -16,13 +17,16 @@ sine only ever doubles something (a sub for headphones).
 Tempo: a row is a 16th note unless said otherwise, and a groove step is the
 frames a row lasts at 59.73 frames/s: [10, 10] is 90 BPM, [7, 7] 128,
 [6, 5] 163, [5, 5, 5, 6] 170, [5, 5] 179. Unequal steps swing: [11, 9]
-lilts the 16ths without changing the tempo.
+lilts the 16ths without changing the tempo. A format-3 song has a BPM
+instead (FT2's: a tick every 2.5 / BPM s), so with 6 ticks a row any
+tempo is exact.
 """
+import os
 import re
 
 from gbm_compose import (Song, noise_snare, noise_hat, noise_crash, pulse_kick, synth, synth_kit, punch_kit,
                          sample_voice, sid_kick, sid_snare, sid_tom, bass_wave, articulation, WAVES,
-                         transpose_text, parse_note, note_name)
+                         transpose_text, parse_note, note_name, load_wav, pcm_voice)
 from gbm_format import env_byte
 
 KIT = {s['name']: s for s in synth_kit()}     # kick, snare, rim, hat, clap: 4-bit, 8192 Hz
@@ -626,6 +630,519 @@ def fade_out():
     return s
 
 
+# ─── 10-12. Jungle, FastTracker 2's way (format 3) ────────────────────────
+#
+# 90s jungle as game soundtracks made it in FastTracker 2: one sampled
+# break chopped by sample offset, retriggered into rolls, pitched and
+# played backwards; a reese; pads and stabs as samples; a chip lead for the
+# hook, echoed in its own channel. The samples are chiptune/samples/*.wav,
+# synthesised by tools/jungle_kit.py -- no recordings, no third-party audio.
+#
+# For the game: the 60-250 Hz band belongs to the engine. The reese has
+# its fundamental turned down and plays with rests, the triangle sub only
+# marks bar downbeats and fades in a third of a second, and the pads are
+# high-passed; what carries is the 300 Hz-4 kHz the speaker plays. Seven
+# voices at most: the SFX bank's gameplay effects take voice 7 (an
+# effects lane whose loss the song survives), the interface's voice 8.
+
+SAMPLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'chiptune', 'samples')
+
+
+def kit_wav(name, **o):
+    return load_wav(os.path.join(SAMPLE_DIR, name + '.wav'), **o)
+
+
+def break_rate(bpm):
+    """The rate that lays a jungle_kit break's 16ths (2048 frames) on a
+    song's at `bpm`: how a tracker musician fitted a break to a tempo --
+    a faster song plays it a little higher."""
+    return round(2048 * bpm / 15)
+
+
+CHOP = re.compile(r"(?:([A-G][#b]?\d):)?(r?)([0-9A-Fa-f])(?:x(\d))?(['!,]?)((?:\+.*)?)$")
+CHOP_LEVEL = {"'": 0x16, ',': 0x26, '!': 0x40}
+
+
+def chops(text, inst, note='C5'):
+    """A bar of a chopped break, a token a 16th. A slice 0-F starts there
+    (sample offset: slice n is +G19 8n, since a break's 16th is 2048 frames),
+    `.` lets the one before play on into the next slices -- the break as
+    recorded -- and `-` stops it. A slice may be pitched (`E5:4` plays
+    slice 4 on E5: faster, higher), backwards (`r4`: slice 4 reversed,
+    from its end), rolled (`Cx3`: retriggered every 3 ticks), and marked
+    `'` ghost, `,` soft or `!` full; `+...` passes commands through. A roll
+    is stopped on the next slice, and every bar's first one stops any left
+    running from the bar before."""
+    out, rolling = [], True
+    for tok in text.split():
+        if tok[0] in '.-':
+            out.append(tok)
+            continue
+        m = CHOP.match(tok)
+        if not m:
+            raise ValueError(f'not a chop: {tok}')
+        sl = int(m[3], 16)
+        cell = f'{m[1] or note}@{inst}+G19{8 * (sl + 1 if m[2] else sl):02X}'
+        if m[2]:
+            cell += '+G1B01'
+        if m[4]:
+            cell += f'+90{m[4]}'
+            rolling = True
+        elif rolling:
+            cell += '+900'
+            rolling = False
+        if m[5]:
+            cell += f'+G1C{CHOP_LEVEL[m[5]]:02X}'
+        out.append(cell + m[6])
+    return ' '.join(out)
+
+
+def echo(text, delay=3, level=0x12):
+    """FT2's echo in one channel: a note that sounds `delay` rows alone is
+    struck again there, quieter (+G1C). The next note is back at its
+    instrument's volume."""
+    toks = text.split()
+    out = list(toks)
+    for i, t in enumerate(toks):
+        m = re.match(r'([A-G][#b]?\d)', t)
+        j = i + delay
+        if m and j < len(toks) and all(x == '.' for x in toks[i + 1:j + 1]):
+            out[j] = f'{m[1]}+G1C{level:02X}'
+    return ' '.join(out)
+
+
+def at(text, extra, rows=16):
+    """Commands added at rows: {row: '+G10A0+G1201'}."""
+    toks = (text.split() + ['.'] * rows)[:rows] if text != '.' else ['.'] * rows
+    for r, fx in extra.items():
+        toks[r] += fx
+    return ' '.join(toks)
+
+
+def sweep(start, rise=8, up=1, down=0xFF):
+    """The reese's filter move for a bar: from `start`, up a step a tick for
+    `rise` rows, back down after -- a wah that ends where it began."""
+    return {0: f'+G10{start:02X}+G12{up:02X}', rise: f'+G12{down:02X}'}
+
+
+# the drop's pad fade-in: from 4 up a step a tick, held after 5 rows (34)
+PAD_IN = '+G1C04+G1A10'
+# the crash backwards, 12 rows (its length) before a downbeat: the swell
+SWELL = '. . . . C5@crash+G1B01 . . . . . . . . . . .'
+
+
+def crash_on(fx, inst='stab'):
+    """A lane of stabs with a crash on its downbeat: the stab after it
+    names its instrument again."""
+    toks = (fx.split() + ['.'] * 16)[:16] if fx != '.' else ['.'] * 16
+    toks[0] = 'C5@crash'
+    for j in range(1, 16):
+        if toks[j][0] not in '.-':
+            if '@' not in toks[j]:
+                head, plus, rest = toks[j].partition('+')
+                toks[j] = f'{head}@{inst}' + plus + rest
+            break
+    return ' '.join(toks)
+
+
+def jungle_ride():
+    """E minor, 170 BPM (FT2's tempo: 6 ticks a row), format 3, 7 voices:
+    the freestyle track. Techniques: one break sampled at 23211 Hz so a 16th
+    is 2048 frames and every 16th is a sample offset of 8n, chopped per row
+    -- the break as played, then edits (the second half's kick-kick moved,
+    ghost snares doubled), a snare rolled by retrigger at 32nds and 32nd
+    triplets, slices pitched up in fills, a snare played backwards into the
+    downbeat; the intro's break through the resonant low-pass opening over
+    eight bars; a reese (a sampled loop of three detuned saws, seamless by
+    construction) swept by the filter a bar at a time and walking down
+    into each chord; parallel open-fifth pads (no third, so every chord of
+    E minor takes the same sample) fading in by volume slide; a pulse hook
+    with an accent and a scoop, echoed in its own channel (FT2's trick: a
+    quieter repeat by volume, +G1C); minor-seventh stabs placed on each
+    chord's relative so all stay in the key, echoed; a crash, and the
+    crash backwards as the swell into each drop. Sync E01 at the first drop,
+    E02 at the breakdown."""
+    bpm = 170
+    s = Song('Jungle Ride', groove=(6,), version=3, voices=7, bpm=bpm, amp=38,
+             filter=dict(cutoff=0x50, resonance=8, mode=1))
+    brk = kit_wav('break_a', rate=break_rate(bpm))
+    pcm_voice(s, brk, 'brk', level=64)
+    pcm_voice(s, brk, 'brkf', level=64, filter=True)
+    pcm_voice(s, kit_wav('reese'), 'reese', level=28, filter=True)
+    s.voice('triangle', 'sub', volume=11, envPace=2, level=30)
+    pcm_voice(s, kit_wav('pad'), 'pad', level=30)
+    art = articulation(s, 'lead', 14, 11, scoop=5, frames=3)
+    s.voice('pulse', 'lead', volume=14, width=90, pwm=2, envPace=0, vibSpeed=5, vibDepth=2, vibDelay=14,
+            table=art, level=15)
+    pcm_voice(s, kit_wav('stab'), 'stab', level=52)
+    pcm_voice(s, kit_wav('crash'), 'crash', level=30)
+
+    B = lambda t: chops(t, 'brk')
+    # break A's 16ths: 0 kick, 2 soft kick, 4 snare, 7 9 ghosts, 8 a hat,
+    # A B kick-kick, C snare, E open hat, F ghost
+    AS_PLAYED = B('0 . . . 4 . . . 8 . . . C . . .')
+    TIGHT = B('0 . . . 4 . . 7 . 9 A . C . E F')
+    EDIT = B("0 . . . 4 . . . 0 . 2 . 4 . . F")
+    SYNC = B("0 . . A 4 . . 7 . 9 A . C . 4' F")
+    BUSY = B("0 . 2 . 4 . 7' . A . B . C 7' C' F")
+    FILL = B("0 . . . 4 . . . C . C' . E5:C . G5:C .")
+    ROLL = B("4 . . . 4 . 4' . Cx3, . . . Cx2 . . .")
+    HATS = B("8, 8' 8, 8' 8, 8' 8, 8' 8, 8' 8, 8' 8, 8' E' 8'")
+    PITCHED = B("0 . . . 4 . . . D5:0 . D5:2 . E5:4 . G5:C .")
+    STUTTER = B("0 0' . . 4 . . 7 . 9 A A' C . C' C,")
+    INTRO = lambda i: chops('0 . . . 4 . . . 8 . . . C . . .' if i >= 4 else "0 . . . . . . . C . . . 4' . . .", 'brkf')
+    K = lambda t: chops(t, 'brk')
+    KFILL = K(". . . . . . . . . . . . C, C' C C!")
+    KREV = K('. . . . . . . . . . . . . . . r4')     # its snare peaks on the downbeat, cut there
+    KHATS = K(". 8' - 8' - 8' - 8' - 8' - 8' - 8' - 8'")
+
+    PAD = {'Em': 'E3', 'C': 'C3', 'D': 'D3', 'G': 'G2'}
+    STAB = {'Em': 'E4', 'C': 'A3', 'D': 'B3', 'G': 'E4'}     # Em7; Am7 over C = C6; Bm7 over D = D6; Em7 over G = G6
+    SUB = {'Em': 'E2', 'C': 'C2', 'D': 'D2', 'G': 'G2'}
+    prog_a = ['Em', 'Em', 'C', 'D']
+    prog_b = ['C', 'D', 'Em', 'Em']
+    bass_a = ['E2@reese . . . . . . . . . E2 . - . G2 .', 'E2 . . . . . - . E3 . D3 . B2 . G2 .',
+              'C2 . . . . . . . . . C2 . - . E2 .', 'D2 . . . . . - . D3 . C3 . A2 . F#2 .']
+    bass_b = ['C2@reese . . . . . . . C3 . . . G2 . - .', 'D2 . . . . . . . D3 . . . A2 . - .',
+              'E2 . . . . . . . . . . . - . E3 .', 'E2 . . . G2 . . . A2 . . . B2 . D3 .']
+    hook_a = ['B4@lead . . E5 . . G5 . . . F#5 . E5 . . .', 'D5 . . . B4 . . . . . . . . . . .',
+              'C5 . . E5 . . G5 . . . F#5 . E5 . . .', 'F#5 . . . . . D5 . . . E5 . . . . .']
+    hook_b = ['E5@lead . . G5 . . C6 . . . B5 . G5 . . .', 'A5 . . F#5 . . D5 . . . E5 . F#5 . . .',
+              'G5 . . . . . F#5 . E5 . . . D5 . . .', 'E5 . . . . . . . . . . . B4 . D5 .']
+    soar = ['G5@lead . . . . . . . . . . . E5 . . .', 'F#5 . . . . . . . A5 . . . . . . .',
+            'B5 . . . . . . . . . . . . . . .', 'A5 . . . G5 . . . F#5 . . . E5 . . .']
+    prog_c = ['Em', 'G', 'C', 'D']
+    bass_c = ['E2@reese . . . E3 . . . - . E2 . . . B2 .', 'G2 . . . . . D3 . - . G2 . . . F#2 .',
+              'C2 . . . C3 . . . - . C2 . . . D2 .', 'D2 . . . . . A2 . - . D2 . E2 . F#2 .']
+    call = ['G5@lead . . . F#5 . E5 . . . B4 . . . D5 .', 'D5 . . . . . . . . . . . - . . .']
+
+    def stabs(c, under_hook=False):
+        """Dub stabs on the and-of-2, echoed; under the hook, a bar's
+        second half only, where the hook rests."""
+        n = STAB[c]
+        if under_hook:
+            return f'. . . . . . . . {n}@stab . . {n}+G1C10 . . . .'
+        return f'. . . . . . {n}@stab . . {n}+G1C10 . . . . . .'
+
+    def bar(brk='.', kit='.', bass='.', sub='.', pad='.', lead='.', fx='.'):
+        s.bar([brk, kit, bass, sub, pad, lead, fx])
+
+    def pad(c, first=False):
+        return f'{PAD[c]}@pad' + (PAD_IN + ' . . . . .+G1A00' if first else '')
+
+    # Intro, 8 bars: the break through the filter, opening; pads fading in.
+    intro = ['Em', 'Em', 'C', 'D'] * 2
+    for i, c in enumerate(intro):
+        filt = {0: '+G1201', 3: '+G1200'}
+        if i == 0:
+            filt[0] = '+G1050+G1181+G1201'
+        brk = at(ROLL.replace('@brk', '@brkf') if i == 7 else INTRO(i), filt)
+        fx = 'C5@crash . . . . . . . . . . . . . . .' if i == 4 else '.'
+        if i in (3, 7):
+            fx = SWELL                                 # into bar 5, and into the groove
+        bar(brk=brk, pad=pad(c, first=i == 0) if i % 2 == 0 or c != intro[i - 1] else '.', fx=fx)
+
+    # A, 16 bars: the groove; the hook arrives for the second half.
+    s.s['loop'] = len(s.s['orders'])
+    beats_a = [AS_PLAYED, TIGHT, EDIT, FILL, TIGHT, SYNC, EDIT, ROLL] * 2
+    for i in range(16):
+        c = prog_a[i % 4]
+        bass = at(bass_a[i % 4], sweep(0x70 + 8 * (i % 4 == 3)))
+        if i == 0:
+            bass = at(bass, {0: '+G1172'})             # the reese's resonance and mode, where the loop returns
+        hooked = i >= 8
+        fx = stabs(c, hooked) if not hooked or i % 2 == 1 else '.'
+        if i % 8 == 0:
+            fx = crash_on(fx)
+        if i == 0:
+            fx = fx.replace('C5@crash', 'C5@crash+E01', 1)
+        if i == 15:
+            fx = SWELL
+        # the lead's last note from the drop is stopped where the loop returns
+        lead = echo(hook_a[i % 4], 3, 8) if i >= 8 else ('-' if i == 0 else '.')
+        bar(brk=beats_a[i], kit=KFILL if i % 4 == 3 else (KREV if i % 8 == 5 else ('-' if i % 8 == 6 else '.')),
+            bass=bass, sub=f'{SUB[c]}@sub' if i % 2 == 0 else '.',
+            pad=pad(c) if i % 2 == 0 or c != prog_a[i % 4 - 1] else '.', lead=lead, fx=fx)
+
+    # B, 16 bars: the hook climbs; busier chops, the hats doubled.
+    beats_b = [TIGHT, BUSY, SYNC, FILL, EDIT, BUSY, SYNC, ROLL] * 2
+    for i in range(16):
+        c = prog_b[i % 4]
+        fx = 'C5@crash . . . . . . . . . . . . . . .' if i % 8 == 0 else '.'
+        bar(brk=beats_b[i], kit=KHATS if i % 4 != 3 else KFILL, bass=at(bass_b[i % 4], sweep(0x78, 6)),
+            sub=f'{SUB[c]}@sub' if i % 2 == 0 else '.', pad=pad(c) if c != prog_b[i % 4 - 1] else '.',
+            lead=echo(hook_b[i % 4], 3, 8), fx=fx)
+
+    # Breakdown, 8 bars: no drums, no bass for four -- the engine's room --
+    # then the hats and a dark reese return, and a roll.
+    for i in range(8):
+        c = prog_b[i % 4]
+        brk = '.' if i < 4 else (HATS if i < 7 else at(ROLL, {0: '+G1C20+G1A10'}))
+        bass = '-' if i == 0 else '.'                  # the reese loops: it is stopped
+        if i >= 4:
+            bass = at(bass_b[i % 4], {0: f'+G10{0x60 + 0x10 * (i - 4):02X}+G1201', 4: '+G1200'})
+        fx = SWELL if i == 7 else '.'
+        bar(brk=brk if i else '-+E02', bass=bass, pad=pad(c, first=i == 0) if c != prog_b[i % 4 - 1] or i == 0 else '.',
+            lead=echo(soar[i % 4], 4, 7), fx=fx)
+
+    # Drop, 16 bars: everything; the hook an octave up for the last eight.
+    beats_d = [TIGHT, SYNC, EDIT, FILL, BUSY, SYNC, EDIT, ROLL] * 2
+    for i in range(16):
+        c = prog_a[i % 4]
+        fx = stabs(c, True) if i % 2 == 1 else '.'
+        if i % 8 == 0:
+            fx = crash_on(fx)
+        if i == 15:
+            fx = SWELL
+        hook = hook_a[i % 4] if i < 8 else transpose_text(hook_a[i % 4], 12)
+        bar(brk=beats_d[i], kit=KHATS if i % 4 != 3 else KFILL, bass=at(bass_a[i % 4], sweep(0x78, 6, 2, 0xFE)),
+            sub=f'{SUB[c]}@sub' if i % 2 == 0 else '.', pad=pad(c) if i % 2 == 0 or c != prog_a[i % 4 - 1] else '.',
+            lead=echo(hook, 3, 8), fx=fx)
+
+    # C, 16 bars: a new turn (Em G C D), the lead calling for two bars and
+    # the stabs answering for two; pitched kicks and stutters; the reese
+    # pumping in octaves. Then the loop goes back to A.
+    beats_c = [SYNC, STUTTER, BUSY, PITCHED, TIGHT, STUTTER, SYNC, ROLL] * 2
+    for i in range(16):
+        c = prog_c[i % 4]
+        n = STAB[c]
+        answer = f'{n}@stab . . {n}+G1C10 . . {n} . . . {n}+G1C10 . {n} . . .'
+        fx = answer if i % 4 >= 2 else '.'
+        if i % 8 == 0:
+            fx = 'C5@crash . . . . . . . . . . . . . . .'
+        if i == 15:
+            fx = SWELL
+        lead = echo(call[i % 4], 3, 8) if i % 4 < 2 else ('-' if i % 4 == 2 else '.')
+        if i >= 8 and i % 4 < 2:
+            lead = echo(transpose_text(call[i % 4], 12), 3, 8)
+        bar(brk=beats_c[i], kit=KFILL if i % 4 == 3 else (KREV if i % 8 == 1 else ('-' if i % 8 == 2 else KHATS)),
+            bass=at(bass_c[i % 4], sweep(0x70 + 4 * (i % 4), 8, 2, 0xFE)),
+            sub=f'{SUB[c]}@sub' if i % 4 == 0 else '.', pad=pad(c), lead=lead, fx=fx)
+    return s
+
+
+def jungle_race():
+    """G minor, 176 BPM, format 3, 7 voices: the race track -- harder and
+    faster. Techniques: a tighter break (a cracking snare, tambourine 16ths)
+    played at 24030 Hz so its 16ths land on 176 BPM's, chopped harder:
+    stutters (one slice retriggered on consecutive rows), 32nd rolls
+    ramping up by volume slide, slices pitched up a fourth and a fifth,
+    backwards snares; a hoover (a sampled pulse-saw swooping up from a
+    fifth below, sustain looped) sliding between notes by portamento; a
+    reese with more resonance and wider sweeps, staccato, so the engine
+    keeps its band; a pulse arpeggio (0xy) in 16ths; minor-seventh stabs on
+    each chord's relative. Sync E01 at the first drop, E02 at the break."""
+    bpm = 176
+    s = Song('Jungle Race', groove=(6,), version=3, voices=7, bpm=bpm, amp=32,
+             filter=dict(cutoff=0x50, resonance=9, mode=1))
+    brk = kit_wav('break_b', rate=break_rate(bpm))
+    pcm_voice(s, brk, 'brk', level=64)
+    pcm_voice(s, brk, 'brkf', level=64, filter=True)
+    pcm_voice(s, kit_wav('reese'), 'reese', level=32, filter=True)
+    s.voice('triangle', 'sub', volume=11, envPace=2, level=28)
+    pcm_voice(s, kit_wav('hoover'), 'hoover', level=34)
+    s.voice('pulse', 'arp', volume=10, width=70, pwm=3, envPace=1, level=16)
+    pcm_voice(s, kit_wav('stab'), 'stab', level=50)
+    pcm_voice(s, kit_wav('crash'), 'crash', level=30)
+
+    B = lambda t: chops(t, 'brk')
+    # break B's 16ths: 0 kick, 4 snare, 6 kick, 9 ghost, A kick, C snare,
+    # E ghost, F soft kick; tambourine under all
+    AS_PLAYED = B('0 . . . 4 . . . 8 . . . C . . .')
+    HARD = B('0 . . . 4 . 6 . . 9 A . C . . F')
+    STUT = B("0 . 0' 0 4 . . . 0 0' A . C C' 4 .")
+    STEP = B("0 . . . 4 . . 9' . . A . 4 . . .")
+    PITCH = B("0 . . . 4 . 6 . A . C . F5:C . G5:C .")
+    ROLL = B("C . . . Cx3, . . . Cx3+G1A20 . . . Cx2 . C! .")
+    BACK = B("0 . . . 4 . 6 . A . C . r4 . . .")
+    HATS = B("2' 2, 2' 2, 2' 2, 2' 2, 2' 2, 2' 2, 2' 2, 2' 2,")
+    INTRO = lambda i: chops('0 . . . 4 . . . 8 . . . C . . .' if i >= 2 else "0 . . . . . . . C . . . 4' . . .", 'brkf')
+    K = lambda t: chops(t, 'brk')
+    KFILL = K(". . . . . . . . C' . C, . C C C, C!")
+    KREV = K('. . . . . . . . . . . . . . . r4')
+
+    STAB = {'Gm': 'G4', 'Eb': 'C4', 'F': 'D4', 'Cm': 'C4', 'D': 'D4'}   # Gm7; Cm7 over Eb; Dm7 over F
+    SUB = {'Gm': 'G2', 'Eb': 'Eb2', 'F': 'F2', 'Cm': 'C2', 'D': 'D2'}
+    ARP = {'Gm': 'G4+037', 'Eb': 'G4+038', 'F': 'A4+037', 'Cm': 'G4+058', 'D': 'F#4+036'}
+    prog_a = ['Gm', 'Gm', 'Eb', 'F']
+    prog_b = ['Cm', 'Cm', 'Eb', 'D']
+    bass_a = ['G2@reese . . . . . - . G2 . . F2 . . D2 .', 'G2 . . . . . - . Bb2 . . A2 . . F2 .',
+              'Eb2 . . . . . - . Eb2 . . G2 . . Bb2 .', 'F2 . . . . . - . F2 . . A2 . . C3 .']
+    bass_b = ['C2@reese . . . . . - . C3 . . Bb2 . . G2 .', 'C2 . . . C3 . - . C2 . . Eb2 . . G2 .',
+              'Eb2 . . . . . - . Eb3 . . D3 . . Bb2 .', 'D2 . . . . . - . D3 . . C3 . . A2 .']
+    hoov_a = ['G3@hoover . . . . . Bb3+318 . . . A3+310 . G3+310 . . .', 'D4+318 . . . . . . . C4+310 . . . Bb3+310 . A3+310 .',
+              'G3+318 . . . . . Bb3+318 . . . G3+318 . F3+310 . . .', 'F3 . . . . . . . A3+318 . . . C4+318 . . .']
+    hoov_b = ['C4@hoover . . . . . . . Eb4+318 . . . D4+310 . . .', 'C4+310 . . . . . G3+318 . . . . . . . . .',
+              'Bb3+318 . . . . . . . G3+318 . . . Eb4+320 . . .', 'D4+310 . . . . . . . . . . . - . . .']
+
+    def stabs(c, alt=False):
+        n = STAB[c]
+        return (f'{n}@stab . . {n}+G1C10 . . . . . . {n} . . {n}+G1C10 . .' if alt else
+                f'. . . . . . {n}@stab . . {n}+G1C10 . . . . . .')
+
+    def arp(c):
+        n = ARP[c].split('+')[0]
+        return f'{ARP[c].replace("+", "@arp+", 1)} . ' + ' . '.join([n] * 7) + ' .'
+
+    def bar(brk='.', kit='.', bass='.', sub='.', hoov='.', lead='.', fx='.'):
+        s.bar([brk, kit, bass, sub, hoov, lead, fx])
+
+    # Intro, 4 bars: the break filtered, the hoover calling.
+    for i in range(4):
+        filt = {0: '+G1201', 4: '+G1200'}
+        if i == 0:
+            filt[0] = '+G1060+G1191+G1201'
+        bar(brk=at(ROLL.replace('@brk', '@brkf') if i == 3 else INTRO(i), filt),
+            hoov='G3@hoover . . . . . . . . . . . - . . .' if i % 2 == 0 else '.',
+            fx=SWELL if i == 3 else '.')
+
+    s.s['loop'] = len(s.s['orders'])
+    # A, 16 bars
+    beats_a = [AS_PLAYED, HARD, STEP, PITCH, HARD, STUT, BACK, ROLL] * 2
+    for i in range(16):
+        c = prog_a[i % 4]
+        bass = at(bass_a[i % 4], sweep(0x68 + 6 * (i % 2), 6, 2, 0xFE))
+        if i == 0:
+            bass = at(bass, {0: '+G1192'})
+        fx = crash_on(stabs(c)) if i % 8 == 0 else stabs(c)
+        if i == 0:
+            fx = fx.replace('C5@crash', 'C5@crash+E01', 1)
+        if i == 15:
+            fx = SWELL
+        # the hoover loops and the arp holds: both stopped where the loop returns
+        bar(brk=beats_a[i], kit=KFILL if i % 4 == 3 else (KREV if i % 8 == 5 else ('-' if i % 8 == 6 else '.')),
+            bass=bass, sub=f'{SUB[c]}@sub' if i % 4 == 0 else '.',
+            hoov=hoov_a[i % 4] if i >= 4 else ('-' if i == 0 else '.'),
+            lead=arp(c) if i >= 8 else ('-' if i == 0 else '.'), fx=fx)
+
+    # B, 16 bars: the minor iv, stabs doubled, the hoover higher.
+    beats_b = [HARD, STUT, PITCH, BACK, STEP, STUT, HARD, ROLL] * 2
+    for i in range(16):
+        c = prog_b[i % 4]
+        fx = stabs(c, alt=True)
+        if i % 8 == 0:
+            fx = crash_on(fx)
+        if i == 15:
+            fx = SWELL
+        bar(brk=beats_b[i], kit=KFILL if i % 4 == 3 else '.', bass=at(bass_b[i % 4], sweep(0x70, 8, 2, 0xFE)),
+            sub=f'{SUB[c]}@sub' if i % 4 == 0 else '.', hoov=hoov_b[i % 4], lead=arp(c), fx=fx)
+
+    # The break, 4 bars: the reese alone, its resonance up and sweeping;
+    # the hats back for the last two, a rolling snare.
+    for i in range(4):
+        c = prog_a[i]
+        bass = at(bass_a[i], sweep(0x50 + 0x10 * i, 12, 3, 0xFD))
+        if i == 0:
+            bass = at(bass, {0: '+G11C1'})
+        bar(brk=('-+E02' if i == 0 else '.') if i < 2 else (HATS if i == 2 else ROLL), bass=bass,
+            hoov='G3@hoover . . . . . . . . . . . . . . .' if i == 0 else ('-' if i == 2 else '.'),
+            lead='-' if i == 0 else '.', fx=SWELL if i == 3 else '.')
+
+    # Drop, 16 bars.
+    beats_d = [HARD, STUT, PITCH, ROLL, HARD, BACK, STUT, ROLL] * 2
+    for i in range(16):
+        c = prog_a[i % 4]
+        bass = at(bass_a[i % 4], sweep(0x78, 8, 2, 0xFE))
+        if i == 0:
+            bass = at(bass, {0: '+G1192'})
+        fx = stabs(c, alt=i % 2 == 1)
+        if i % 8 == 0:
+            fx = crash_on(fx)
+        if i == 15:
+            fx = SWELL
+        bar(brk=beats_d[i], kit=KFILL if i % 4 == 3 else '.', bass=bass,
+            sub=f'{SUB[c]}@sub' if i % 2 == 0 else '.', hoov=hoov_a[i % 4], lead=arp(c), fx=fx)
+
+    # C, 8 bars: the relative major's turn (Gm B-flat E-flat D), the hoover
+    # answering itself an octave up, the break pitched and stuttered.
+    prog_c = ['Gm', 'Bb', 'Eb', 'D']
+    bass_c = ['G2@reese . . . G3 . - . G2 . . . D3 . - .', 'Bb2 . . . Bb3 . - . Bb2 . . . F2 . - .',
+              'Eb2 . . . Eb3 . - . Eb2 . . . Bb2 . - .', 'D2 . . . D3 . - . F#2 . . . A2 . C3 .']
+    hoov_c = ['D4@hoover . . . . . . . Bb3+318 . . . . . . .', 'D4+318 . . . F4+318 . . . . . . . . . . .',
+              'G4+318 . . . . . F4+310 . Eb4+310 . . . . . . .', 'F#4+310 . . . . . . . . . . . - . . .']
+    beats_c = [PITCH, STUT, HARD, ROLL, BACK, STUT, PITCH, ROLL]
+    STAB['Bb'], SUB['Bb'], ARP['Bb'] = 'G4', 'Bb2', 'D4+038'          # Gm7 over B-flat = B-flat 6
+    for i in range(8):
+        c = prog_c[i % 4]
+        fx = crash_on(stabs(c, alt=True)) if i == 0 else (stabs(c, alt=i % 2 == 1) if i < 4 else '.')
+        if i == 7:
+            fx = SWELL
+        hv = hoov_c[i % 4] if i < 4 else transpose_text(hoov_c[i % 4], 12)
+        bar(brk=beats_c[i], kit=KFILL if i % 4 == 3 else (KREV if i == 5 else ('-' if i == 6 else '.')),
+            bass=at(bass_c[i % 4], sweep(0x70 + 8 * (i % 2), 8, 2, 0xFE)),
+            sub=f'{SUB[c]}@sub' if i % 2 == 0 else '.', hoov=hv, lead=arp(c), fx=fx)
+    return s
+
+
+def jungle_menu():
+    """A minor, 164 BPM, format 3, 6 voices (the SFX bank's effects take
+    nothing from it): the calm one, for menus. Techniques: break A at 22391
+    Hz -- lower and slower than the race, the same file -- played mostly as
+    recorded, retriggered a beat at a time, with ghost-note edits and a
+    half-time section; open-fifth pads in parallel over A minor's A, F, C
+    and G; a warm rolling bass, a saw through the low-pass, gliding by
+    portamento; a triangle flute with a delayed vibrato and its echo in its
+    own channel; a pulse bell arpeggiating each chord, quiet."""
+    bpm = 164
+    s = Song('Jungle Menu', groove=(6,), version=3, voices=6, bpm=bpm, amp=36,
+             filter=dict(cutoff=0x68, resonance=5, mode=1))
+    brk = kit_wav('break_a', rate=break_rate(bpm))
+    pcm_voice(s, brk, 'brk', level=56)
+    s.voice('saw', 'bass', volume=12, envPace=0, filter=True, level=34)
+    pcm_voice(s, kit_wav('pad'), 'pad', level=32)
+    s.voice('triangle', 'flute', volume=13, envPace=0, vibSpeed=4, vibDepth=2, vibDelay=18, level=34)
+    s.voice('pulse', 'bell', volume=9, width=48, envPace=2, level=26)
+    pcm_voice(s, kit_wav('crash'), 'crash', level=24)
+
+    B = lambda t: chops(t, 'brk')
+    AS_PLAYED = B('0 . . . 4 . . . 8 . . . C . . .')
+    SOFT = B("0 . . . 4 . . 7' . 9' A . C . . F'")
+    GHOSTS = B("0 . . . 4 . 7' . . 9' A . C . 7' F'")
+    HALF = B("0 . . . . . . 7' . . 2' . C . . .")
+    PAD = {'Am': 'A2', 'F': 'F2', 'C': 'C3', 'G': 'G2'}
+    BELL = {'Am': ('A4', 'C5', 'E5', 'B5'), 'F': ('F4', 'A4', 'C5', 'G5'), 'C': ('C5', 'E5', 'G5', 'D6'),
+            'G': ('G4', 'B4', 'D5', 'A5')}
+    BASS = {'Am': 'A2@bass . . . . . . . . . A2 . . . G2+320 .', 'F': 'F2 . . . . . . . . . F2 . . . E2+320 .',
+            'C': 'C3 . . . . . . . . . G2+320 . . . B2 .', 'G': 'G2 . . . . . . . . . D3+320 . . . G2+320 .'}
+    prog = ['Am', 'F', 'C', 'G']
+    flute = ['E5@flute . . . . . . . D5 . C5 . . . B4 .', 'A4 . . . . . . . . . . . C5 . . .',
+             'G5 . . . . . E5 . . . D5 . . . C5 .', 'D5 . . . . . . . . . . . . . . .',
+             'E5 . . . . . . . G5 . . . A5 . . .', 'C6 . . . . . . . B5 . A5 . . . G5 .',
+             'E5 . . . . . . . . . D5 . . . E5 .', 'B4 . . . . . . . . . . . . . . .']
+
+    def bell(c, low=False):
+        """The chord broken in 8ths, echoed; an octave down under the flute."""
+        a, b, d, e = BELL[c]
+        line = echo(f'{a}@bell . {b} . {d} . . . {e} . . . {d} . . .', 3, 0x0C)
+        return transpose_text(line, -12) if low else line
+
+    def bar(brk='.', bass='.', pad='.', fl='.', bl='.', fx='.'):
+        s.bar([brk, bass, pad, fl, bl, fx])
+
+    # Intro, 4 bars: pads and the bell.
+    for i, c in enumerate(prog):
+        bar(pad=f'{PAD[c]}@pad' + (PAD_IN + ' . . . . .+G1A00' if i == 0 else ''), bl=bell(c),
+            fx='. . . . C5@crash+G1B01 . . . . . . . . . . .' if i == 3 else '.')
+    s.s['loop'] = len(s.s['orders'])
+    sections = [(AS_PLAYED, SOFT, False), (SOFT, GHOSTS, True), (HALF, HALF, True), (GHOSTS, SOFT, True)]
+    for k, (b1, b2, fl_on) in enumerate(sections):
+        for i in range(8):
+            c = prog[i % 4]
+            bass = at(BASS[c], {0: '+G1068+G1201', 8: '+G12FF'})
+            if k == 2 and i < 4:                           # the half-time section breathes first
+                bass = '-' if i == 0 else '.'
+            fx = 'C5@crash . . . . . . . . . . . . . . .' if i == 0 and k != 2 else '.'
+            if i == 7 and k in (1, 2):
+                fx = '. . . . C5@crash+G1B01 . . . . . . . . . . .'
+            if i == 0 and k == 1:
+                fx = fx.replace('C5@crash', 'C5@crash+E01', 1)
+            fl = echo(flute[i], 3, 0x14) if fl_on else ('-' if i == 0 else '.')
+            bar(brk=(b1 if i % 2 == 0 else b2) if not (k == 2 and i < 2) else '.', bass=bass,
+                pad=f'{PAD[c]}@pad', fl=fl,
+                bl=bell(c, fl_on) if k != 1 or i % 2 == 0 else '.', fx=fx)
+    return s
+
+
 SONGS = {
     'cloud_garden': cloud_garden,
     'tidal_twang': tidal_twang,
@@ -636,6 +1153,9 @@ SONGS = {
     'neon_acid': neon_acid,
     'victory': victory,
     'fade_out': fade_out,
+    'jungle_ride': jungle_ride,
+    'jungle_race': jungle_race,
+    'jungle_menu': jungle_menu,
 }
 
 

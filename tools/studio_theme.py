@@ -1,7 +1,7 @@
 """Steel Circuit: a live PCM8 tracker band, with a vox acid voice.
 
 Eight voices: guitar, bass, lead, kick, snare, hats, orchestra, acid.
-The eight rendered instruments share one 16 KiHz bank. It is a fresh
+The three themes share seventeen instruments in one 16 KiHz bank. It is a fresh
 tracker arrangement, rather than an export of studio's mastered loops.
 """
 from gbm_compose import Song, studio_bank, transpose_text
@@ -13,7 +13,7 @@ SAMPLES = ('gtr_chord', 'gtr_chug', 'gtr_lead', 'bass', 'kick', 'snare', 'hat', 
 def theme(directory, rate=16384):
     # ~138 BPM on the driver's 59.73 Hz clock, a six-frame row with a
     # seven-frame row every other beat: the same groove repeats at the loop.
-    s = Song('Steel Circuit', groove=(6, 7), version=3, voices=8)
+    s = Song('Steel Circuit', groove=(6, 7), version=4, voices=8)
     bank = studio_bank(s, directory, rate=rate, only=SAMPLES)
     levels = dict(gtr_chord=10, gtr_chug=11, gtr_lead=9, bass=9,
                   kick=15, snare=13, hat=5, orch_am=7)
@@ -53,7 +53,7 @@ def theme(directory, rate=16384):
 
 
 def jungle(directory, rate=16384):
-    s = Song('Chrome Breaks', groove=(5, 5, 5, 6), version=3, voices=8)
+    s = Song('Chrome Breaks', groove=(5, 5, 5, 6), version=4, voices=8)
     bank = studio_bank(s, directory, rate=rate, only=SAMPLES)
     levels = dict(kick=14, snare=13, hat=5, ohat=5, reese=10, stab=8,
                   trance_pluck=7, orch_am=6)
@@ -84,7 +84,7 @@ def jungle(directory, rate=16384):
 
 
 def trance(directory, rate=16384):
-    s = Song('Prism Drive', groove=(7, 7, 6, 7), version=3, voices=8)
+    s = Song('Prism Drive', groove=(7, 7, 6, 7), version=4, voices=8)
     bank = studio_bank(s, directory, rate=rate, only=SAMPLES)
     levels = dict(kick=15, snare=10, clap=9, hat=4, ohat=5, bass=9,
                   trance_saw=8, trance_pluck=8, pad=5, pad_f=5, pad_g=5)

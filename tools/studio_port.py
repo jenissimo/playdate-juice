@@ -67,7 +67,7 @@ def build(directory, outdir, mix_gain=1.0, lane_gains=None, packed=True, quiet=F
     os.makedirs(outdir, exist_ok=True)
     results = {}
     for name, source in port['songs'].items():
-        s = Song('Studio ' + name, groove=(6,), version=3, voices=8)
+        s = Song('Studio ' + name, groove=(6,), version=4, voices=8)
         s.s['tickRate'] = source['bpm'] * 4 * 6 / 60
         s.s['mixGain'] = mix_gain
         s.s['sampleBank'] = dict(count=len(samples), hash=identity)

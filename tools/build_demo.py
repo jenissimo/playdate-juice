@@ -17,7 +17,7 @@ only copied in at demo-build time.
 
 On top of the Lua, the Zoo stages:
   music/     chiptune/music/*.gbm, the songs and the SFX bank;
-  jukebox/   twelve tracker renders and three original studio masters as ADPCM WAV
+  jukebox/   fifteen tracker renders and three original studio masters as ADPCM WAV
              (needs a host C compiler; skipped without one);
   pdex.*     the chiptune C extension, built with CMake: for the simulator
              with the host compiler, and for the device when arm-none-eabi-gcc
@@ -41,7 +41,8 @@ MODULES = [
 ]
 JUKEBOX_SONGS = ["cloud_garden", "tidal_twang", "jungle_pulse", "crimson_clash", "willow_lane",
                 "hollow_deep", "neon_acid", "victory", "fade_out",
-                "steel_circuit", "chrome_breaks", "prism_drive"]
+                "steel_circuit", "chrome_breaks", "prism_drive",
+                "jungle_ride", "jungle_race", "jungle_menu"]
 STUDIO_SONGS = {"studio_menu": "menu", "studio_play": "play", "studio_multi": "multi"}
 
 

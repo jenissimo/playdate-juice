@@ -6,8 +6,15 @@ so the GBM tracker's projects and exports are interchangeable with these:
 the encoder is tested byte for byte against blobs the original produced
 (test/chiptune/golden). Format 2 (`"version": 2` in the project) is this
 repo's extension: 1-8 voices, an oscillator per instrument, width, PWM,
-ring, sync, a filter. Layout reference: chiptune/README.md.
-Format 3 shares that layout and adds the identity of an external PCM8 bank.
+ring, sync, a filter. Format 3 (`"version": 3`) adds FastTracker 2's
+sampler: 8-bit samples at their own rates with loops, stored past the
+64 KB the rest of the blob is addressed in, a volume per instrument, and a
+tempo (`"bpm"`). Format 4 stores shared PCM8 externally, with root pitch,
+release and mastering. Layout reference: chiptune/README.md.
+
+A format-3 sample is {name, pcm: [-128..127], rate: Hz at C5, loop:
+[start, length] or None}; a format-2 style 4-bit sample ({name, data:
+[0..15]}) is converted to one.
 
 One addition, after the blob where the driver never looks: the SFX names,
 so a game can say Chiptune.sfx("coin") instead of an index.
@@ -21,12 +28,16 @@ FX = dict(ARP=0x0, SLIDE_UP=0x1, SLIDE_DOWN=0x2, PORTA=0x3, VIBRATO=0x4, ENVELOP
 NOTE_OFF = -1
 HEADER = 24
 HEADER_V2 = 26
-HEADER_V3 = 32
+HEADER_V3 = 30
+HEADER_V4 = 32
+PCM_MAX = 1 << 19           # frames: vox's 20.12 position must stay under 2^31
 
 # Format 2's oscillators, and its extended commands (encoded 0xF1 cmd val).
-OSC = dict(pulse=0, wave=1, noise=2, sample=3, triangle=4, saw=5)
+OSC = dict(pulse=0, wave=1, noise=2, sample=3, triangle=4, saw=5, pcm=6)
 FX2 = dict(CUTOFF=0x10, RESONANCE=0x11, CUTOFF_SLIDE=0x12, FILTER=0x13, WIDTH=0x14, PWM=0x15,
-           OSC=0x16, RING=0x17, SYNC=0x18)
+           OSC=0x16, RING=0x17, SYNC=0x18,
+           # format 3: FT2's commands, under FT2's letters
+           OFFSET=0x19, VOLUME_SLIDE=0x1A, BACKWARDS=0x1B, VOLUME=0x1C, PAN_POSITION=0x1E, BPM=0x1F)
 V1_WIDTH = [32, 64, 128, 192]
 
 
@@ -46,6 +57,16 @@ WAVES = dict(
     square=lambda w: [15 if (i % 32) < w * 2 else 0 for i in range(32)],
     sine=lambda: [int(__import__('math').floor(7.5 + 7.5 * __import__('math').sin(__import__('math').pi * 2 * i / 32) + 0.5)) for i in range(32)],
 )
+
+
+def pcm_of(sample):
+    """A sample as format 3 stores it: 8-bit signed at a rate for C5. A
+    4-bit one (format 2's, 8192 Hz at a C5 of 523.25 Hz) keeps its pitch
+    against vox's C5 of 524.288 Hz."""
+    if 'pcm' in sample:
+        return sample
+    return dict(name=sample['name'], pcm=[max(-128, min(127, (v & 15) * 17 - 128)) for v in sample['data']],
+                rate=8208, loop=None)
 
 
 def _is_empty(c):
@@ -116,18 +137,20 @@ def pcm_frame(data, at):
 
 def validate(song):
     e = []
-    if song.get('version', 1) not in (1, 2, 3):
-        e.append('version must be 1, 2 or 3')
-    if song.get('version') == 3:
+    if song.get('version', 1) not in (1, 2, 3, 4):
+        e.append('version must be 1, 2, 3 or 4')
+    if song.get('version') == 3 and song.get('sampleBank'):
+        e.append('external sample banks need format 4; format 3 embeds samples')
+    if song.get('version') == 4:
         bank = song.get('sampleBank') or {}
         count = bank.get('count', 0)
         h = bank.get('hash', 0)
         if not 0 <= count <= 255 or not 0 <= h <= 0xFFFFFFFF or (count and 'hash' not in bank) or (not count and h):
-            e.append('format 3 needs the sample bank count and identity')
+            e.append('format 4 needs the sample bank count and identity')
         if song.get('samples'):
-            e.append('format 3 samples live in an external bank')
+            e.append('format 4 samples live in an external bank')
         if not 1 <= song.get('tickRate', 59.7275) <= 1000 or not 0 <= song.get('mixGain', 0) < 256:
-            e.append('invalid format-3 tick rate or mix gain')
+            e.append('invalid format-4 tick rate or mix gain')
     rows = song['rows']
     if rows < 1 or rows > 255:
         e.append(f'rows {rows} out of 1-255')
@@ -150,6 +173,23 @@ def validate(song):
             e.append(f"SFX {i} pattern {s['pattern']} is also in the song")
     if len(song['instruments']) > 256:
         e.append('at most 256 instruments')
+    if song.get('version', 1) == 3:
+        smp = [pcm_of(x) for x in song.get('samples') or []]
+        if len(smp) > 255:
+            e.append('at most 255 samples')
+        for i, x in enumerate(smp):
+            n = len(x['pcm'])
+            if not 1 <= n <= PCM_MAX:
+                e.append(f"sample {i} ({x['name']}): {n} frames, 1-{PCM_MAX}")
+            if not 1 <= x['rate'] <= 1000000:
+                e.append(f"sample {i} ({x['name']}): rate {x['rate']}")
+            lp = x.get('loop')
+            if lp and not (lp[1] > 0 and 0 <= lp[0] < n and lp[0] + lp[1] <= n):
+                e.append(f"sample {i} ({x['name']}): loop {lp} outside {n} frames")
+        if not 0 <= song.get('bpm', 0) <= 255:
+            e.append(f"bpm {song['bpm']} out of 0-255")
+        if not 1 <= song.get('amp', 16) <= 255:
+            e.append(f"amp {song['amp']} out of 1-255 (16ths)")
     g = song['grooves']
     if not g or any(not x or len(x) > 16 or any(t < 1 or t > 255 for t in x) for x in g):
         e.append('grooves need 1-16 steps of 1-255 frames')
@@ -168,13 +208,15 @@ def validate(song):
         if len(t['rows']) > 42:
             e.append(f"table {i}: {len(t['rows'])} rows, at most 42")
     for i, ins in enumerate(song['instruments']):
-        if song.get('version') == 3 and (not 0 <= ins.get('release', 0) <= 255 or not 0 <= round(ins.get('mixGain', 0) * 256) <= 65535):
+        if song.get('version') == 4 and ins.get('osc', ins['kind']) == 'pcm':
+            e.append(f'instrument {i}: format 4 bank instruments use the sample oscillator')
+        if song.get('version') == 4 and (not 0 <= ins.get('release', 0) <= 255 or not 0 <= round(ins.get('mixGain', 0) * 256) <= 65535):
             e.append(f'instrument {i}: invalid release or mix gain')
         if ins.get('table', -1) >= len(song['tables']):
             e.append(f"instrument {i}: no table {ins['table']}")
         smp = ins.get('sample')
-        count = (song.get('sampleBank') or {}).get('count', 0) if song.get('version') == 3 else len(song.get('samples') or [])
-        if smp is not None and ((song.get('version') == 3 and smp < 0) or smp >= count):
+        count = (song.get('sampleBank') or {}).get('count', 0) if song.get('version') == 4 else len(song.get('samples') or [])
+        if smp is not None and ((song.get('version') == 4 and smp < 0) or smp >= count):
             e.append(f'instrument {i}: no sample {smp}')
         if ins.get('osc', ins['kind']) == 'wave' and ins['duty'] >= len(song['waves']):
             e.append(f"instrument {i}: no wave {ins['duty']}")
@@ -187,17 +229,18 @@ def encode_song(song, names=False):
         raise ValueError('Song is invalid:\n' + '\n'.join(errors))
     v2 = song.get('version', 1) >= 2
     v3 = song.get('version') == 3
-    extended = v3 and ('tickRate' in song or 'mixGain' in song)
+    v4 = song.get('version') == 4
+    extended = v4 and ('tickRate' in song or 'mixGain' in song)
     nv = song.get('voices', 4) if v2 else 4
-    out = [0] * (40 if extended else HEADER_V3 if v3 else HEADER_V2 if v2 else HEADER)
+    out = [0] * (40 if extended else HEADER_V4 if v4 else HEADER_V3 if v3 else HEADER_V2 if v2 else HEADER)
 
     def w16(at, v):
         out[at] = v & 255
         out[at + 1] = v >> 8
 
     here = lambda: len(out)
-    out[0], out[1], out[2] = 0x47, 0x42, 3 if v3 else 2 if v2 else 1
-    if v3:
+    out[0], out[1], out[2] = 0x47, 0x42, 4 if v4 else 3 if v3 else 2 if v2 else 1
+    if v4:
         bank = song.get('sampleBank') or {}
         w16(26, bank.get('count', 0) | (0x8000 if extended else 0))
         h = bank.get('hash', 0)
@@ -212,6 +255,10 @@ def encode_song(song, names=False):
         f = song.get('filter') or {}
         out[24] = f.get('cutoff', 255) & 255
         out[25] = ((f.get('resonance', 0) & 15) << 4) | (f.get('mode', 1) & 7)
+    if v3:
+        out[26] = len(song.get('samples') or [])
+        out[27] = song.get('bpm', 0) & 255
+        out[28] = song.get('amp', 16) & 255     # FT2's amplification, in 16ths: the music, not the SFX
 
     def uniq(seq):
         seen, r = set(), []
@@ -245,8 +292,12 @@ def encode_song(song, names=False):
     for ins in song['instruments']:
         kind = ins['kind']
         if v2:
-            # osc, then the format-1 record, then sample+1, pwm, flags, 3 spare
+            # osc, then the format-1 record, then sample+1, pwm, flags, then
+            # format 3's volume (0-64) and 2 spare; format 3 plays every
+            # sample on its sampler
             osc = ins.get('osc', kind)
+            if v3 and osc == 'sample':
+                osc = 'pcm'
             if osc == 'pulse':
                 duty = ins['width'] if 'width' in ins else V1_WIDTH[ins['duty'] & 3]
             elif osc == 'noise':
@@ -257,12 +308,12 @@ def encode_song(song, names=False):
             flags = (1 if ins.get('ring') else 0) | (2 if ins.get('sync') else 0) | (4 if ins.get('filter') else 0)
             if ins.get('table', -1) >= 0:
                 table_refs.append((here() + 7, ins['table']))
-            gain = round(ins.get('mixGain', 0) * 256) if v3 else 0
+            gain = round(ins.get('mixGain', 0) * 256) if v4 else 0
             out += [OSC[osc], duty & 255, ((ins.get('vibSpeed', 0) & 15) << 4) | (ins.get('vibDepth', 0) & 15),
                     ins.get('vibDelay', 0) & 255, env_byte(ins['volume'], ins['envDir'], ins['envPace']),
                     ins.get('sweep', 0) & 255 if osc == 'pulse' else 0, ins.get('length', 0) & 255, 0, 0,
-                    ins.get('tableSpeed', 0) & 255, smp + 1 if osc == 'sample' and smp is not None else 0,
-                    ins.get('pwm', 0) & 255, flags, ins.get('release', 0) & 255 if v3 else 0, gain & 255, gain >> 8]
+                    ins.get('tableSpeed', 0) & 255, smp + 1 if osc in ('sample', 'pcm') and smp is not None else 0,
+                    ins.get('pwm', 0) & 255, flags, ins.get('release', 0) & 255 if v4 else min(64, ins.get('level', 64)) if v3 else 0, gain & 255, gain >> 8]
             continue
         env = ins['volume'] & 3 if kind == 'wave' else env_byte(ins['volume'], ins['envDir'], ins['envPace'])
         duty = (8 if ins['duty'] else 0) if kind == 'noise' else ins['duty']
@@ -312,8 +363,19 @@ def encode_song(song, names=False):
     w16(22, here())
     smp_table = here()
     out += [0] * (len(samples) * 2)
+    pcm_refs = []
     for i, s in enumerate(samples):
         w16(smp_table + i * 2, here())
+        if v3:
+            # a 24-byte header: flags (1 loop), 3 spare, then u32 rate at C5,
+            # data offset (filled in below), frames, loop start, loop length
+            x = pcm_of(s)
+            lp = x.get('loop') or (0, 0)
+            pcm_refs.append((here() + 8, x))
+            out += [1 if x.get('loop') else 0, 0, 0, 0]
+            for v in (x['rate'], 0, len(x['pcm']), lp[0], lp[1]):
+                out += [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255]
+            continue
         if v2:
             # plain 4-bit, high nibble first, after a u16 count: vox plays
             # samples directly, with none of CH3's rotation and inversion
@@ -340,6 +402,15 @@ def encode_song(song, names=False):
             w16(dirs[c] + i * 2, at)
     if len(out) > 0xFFFF:
         raise ValueError(f'Song is {len(out)} bytes; the limit is 64 KB')
+    # Format 3's frames go last, past the 64 KB of u16 offsets, each with a
+    # guard frame after it for the interpolation: the loop start's frame, or
+    # a repeat of the last.
+    for at, x in pcm_refs:
+        d = here()
+        out[at:at + 4] = [d & 255, (d >> 8) & 255, (d >> 16) & 255, (d >> 24) & 255]
+        pcm = list(x['pcm'])
+        lp = x.get('loop')
+        out += [v & 255 for v in pcm] + [(pcm[lp[0]] if lp else pcm[-1]) & 255]
     blob = bytes(out)
     if names:
         nm = [len(sfx)]

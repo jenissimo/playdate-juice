@@ -193,10 +193,13 @@ Rendered from here, the rock loops are bit-identical to Overturn's (`tools/music
 -1 dBFS, with no jump at the seam; a wrongly sized bar throws; a bank exports its samples, a
 one-shot without a loop, a sustain loop inside its sample.
 
-## The live tracker: format 3
+## The live tracker: format 4
 
 **Port brief: [TRACKER_PORT.md](TRACKER_PORT.md)** -- the measured starting point and acceptance
-criteria for the original studio arrangement. The implemented ports are described below.
+criteria for the original studio arrangement. The brief used the development
+name format 3; the shared-bank layout is now format 4 to preserve master’s
+existing embedded FT2 format 3. Both use the same driver and vox mixer.
+The implemented ports are described below.
 
 **Goal.** The rock sound playing live on chiptune's driver: instrument samples rendered here
 (guitars through the amp, the synth bass, the kit, the hits), played by a GBM song of a few
@@ -207,7 +210,7 @@ tracker arrangement is.
 
 **Implemented.** `samples.cjs` exports the source WAVs; `studio_bank()` in
 `tools/gbm_compose.py` resamples and quantises them into a shared `.gbank`.
-GBM format 3 plays signed PCM8 with per-sample rate/root, linear interpolation
+GBM format 4 plays signed PCM8 with per-sample rate/root, linear interpolation
 and sustain loops on vox. Format 1's DMG and format 2's legacy 4-bit sample
 path remain compatible. All runtime work stays in the existing driver and
 32-sample renderer, with no allocations or per-sample division.
@@ -255,9 +258,9 @@ tails (past the next retrigger and release overlap) are removed.
 
 | Port | Encoded starts checked | Layered source hits | Omitted events | LUFS | 50 ms RMS spread |
 |---|---:|---:|---:|---:|---:|
-| menu | 780 | 96 | 10 | -14.57 | 4.16 dB |
-| play | 1496 | 148 | 39 | -14.59 | 4.70 dB |
-| multi | 855 | 83 | 17 | -14.55 | 3.96 dB |
+| menu | 780 | 96 | 10 | -14.57 | 4.14 dB |
+| play | 1496 | 148 | 39 | -14.60 | 4.72 dB |
+| multi | 855 | 83 | 17 | -14.55 | 4.00 dB |
 
 All three pass the brief's A/B limits: within 0.06 LU of the studio, within
 1.1 dB in 100 Hz-3 kHz and 1.3 dB above 8 kHz. The JSON ledger

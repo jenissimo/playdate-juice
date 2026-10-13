@@ -90,16 +90,17 @@ Lua on this CPU. The rules above carry over:
 - `chiptune.lua` follows rules 1-3: it loads under host `lua`, touches nothing
   until `Chiptune.load`, and with no `chiptune_native` present every call is
   a no-op (`Chiptune.available` is false).
-- The C splits the same way: `gbapu.c`, `vox.c`, `gbm.c` and `chip.c` are pure C99 with
+- The C splits the same way: `gbapu.c`, `vox.c`, `gbm.c`, `chip.c` and `bank_codec.c` are pure C99 with
   no SDK header, and are what `python tools/chiptune.py test` compiles and
   runs on the host. Only `chiptune_pd.c` / `chiptune_main.c` include
   `pd_api.h`.
 - The driver is a port held to the original's behaviour by recorded traces
   (`test/chiptune/golden.zip`). A change to `gbm.c` that alters any APU write
   fails that test; if the change is meant to, say so and re-record, don't
-  loosen the comparison. Formats 2 and 3 have no original:
-  `test/chiptune/v2_test.c` and `v3_test.c` hold them to their features,
-  including PCM8 roots, interpolation, loops and legacy SFX coexistence.
+  loosen the comparison. Formats 2, 3 and 4 have no original:
+  `test/chiptune/v2_test.c`, `v3_test.c` and `v4_test.c` hold them to their features,
+  including FT2 commands, PCM8 roots, loops and cross-format SFX coexistence.
+  Changes preserve format-1/2/3 renders sample for sample against master.
 - The render path runs on a Cortex-M7 in an interrupt: single-precision float
   only (`-Wdouble-promotion` is on for the device), no division or allocation
   per sample, and measure with `tools/chiptune.py render ... --bench` before
