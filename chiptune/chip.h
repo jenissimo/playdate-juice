@@ -24,6 +24,7 @@ enum {
 typedef struct {
     uint8_t op, a, b;
     const uint8_t *blob;
+    const uint8_t *samples;
 } ChipCmd;
 
 #define CHIP_QUEUE 64
@@ -43,6 +44,8 @@ void chip_init(Chip *c, uint32_t sample_rate);
 /* From the game's side. Returns 0 if the queue is full (64 commands between
    two audio callbacks: a runaway loop, not normal use). */
 int chip_post(Chip *c, uint8_t op, uint8_t a, uint8_t b, const uint8_t *blob);
+int chip_post_bank(Chip *c, uint8_t op, uint8_t a, uint8_t b,
+                   const uint8_t *blob, const uint8_t *samples);
 /* From the audio side: the callback. Returns 0 when it produced silence, so
    the host may skip mixing it. */
 int chip_render(Chip *c, int16_t *left, int16_t *right, int n);

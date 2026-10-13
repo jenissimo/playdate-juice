@@ -12,5 +12,6 @@ set(CHIPTUNE_SOURCES
     ${CHIPTUNE_DIR}/vox.c
     ${CHIPTUNE_DIR}/gbm.c
     ${CHIPTUNE_DIR}/chip.c
+    ${CHIPTUNE_DIR}/bank_codec.c
     ${CHIPTUNE_DIR}/chiptune_pd.c)
 set(CHIPTUNE_MAIN ${CHIPTUNE_DIR}/chiptune_main.c)

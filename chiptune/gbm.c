@@ -63,6 +63,7 @@ static const uint8_t NR32_LEVELS[4] = {0x00, 0x60, 0x40, 0x20};
 /* Blob offsets are u16 little-endian from its start: read them bytewise, a
    blob loaded from a file need not be aligned. */
 #define U16(p) ((uint16_t)((p)[0] | ((p)[1] << 8)))
+#define U32(p) ((uint32_t)U16(p) | ((uint32_t)U16((p) + 2) << 16))
 
 static void W(Gbm *g, uint16_t reg, uint8_t v) { gbapu_write(g->apu, reg, v); }
 
@@ -263,11 +264,22 @@ static void w_vox(Gbm *g, GbmChan *c, uint8_t e, uint16_t v)
     }
     if (e & 1) {
         uint8_t env = c->env;
+        if (k->version == 3) vox_note_tail(x, i);
+        vox_articulation(x, i, k->version == 3 ? c->insp[13] : 0,
+                         k->version == 3 ? U16(c->insp + 14) : 0);
         if (v1 && osc == OSC_WAVE) env = (uint8_t)(V1_WAVE_VOL[env & 3] << 4);
         if (osc == OSC_SAMPLE && c->sample) {
-            const uint8_t *tab = k->base + U16(k->base + 22);
-            const uint8_t *smp = k->base + U16(tab + (c->sample - 1) * 2);
-            vox_sample(x, i, smp + 2, U16(smp));
+            if (k->version == 3 && k->samples) {
+                const uint8_t *r = k->samples + 12 + (c->sample - 1) * 24;
+                vox_sample8(x, i, k->samples + U32(r), U32(r + 4), U32(r + 8),
+                            U32(r + 12), U32(r + 16), U32(r + 20));
+            } else {
+                const uint8_t *tab = k->base + U16(k->base + 22);
+                const uint8_t *smp = k->base + U16(tab + (c->sample - 1) * 2);
+                vox_sample(x, i, smp + 2, U16(smp));
+            }
+        } else if (osc == OSC_SAMPLE) {
+            vox_sample(x, i, NULL, 0);
         }
         vox_sweep(x, i, osc == OSC_PULSE ? c->sweep : 0);
         vox_trigger(x, i, osc, v, env);
@@ -328,6 +340,8 @@ static void note_on(Gbm *g, GbmChan *c, uint8_t note, uint8_t mode)
 /* A note's period on this channel (the wave channel sounds an octave down). */
 static uint16_t period_of(const Gbm *g, const GbmChan *c, uint8_t n)
 {
+    if (bank_of(g, c)->version == 3 && osc_of(g, c) == OSC_SAMPLE)
+        return (uint16_t)((n >= NOTE_COUNT ? NOTE_COUNT - 1 : n) * 16);
     if (osc_of(g, c) == OSC_WAVE) n = (uint8_t)(n + 12);
     if (n >= NOTE_COUNT) n = NOTE_COUNT - 1;
     return PERIODS[n];
@@ -349,7 +363,9 @@ static void note_off(Gbm *g, GbmChan *c)
     c->delay = 0;
     if (g->look) return;              /* parsed ahead: release silences it on time */
     if (c->block) return;             /* lent to an SFX (or muted): leave it be */
-    silence_hw(g, c->hw);
+    if (g->v2 && bank_of(g, c)->version == 3 && osc_of(g, c) == OSC_SAMPLE)
+        vox_release(g->vox, c->hw);
+    else silence_hw(g, c->hw);
 }
 
 static void set_inst(Gbm *g, GbmChan *c, uint8_t i)
@@ -575,6 +591,8 @@ static void frame_ch(Gbm *g, GbmChan *c)
         if (n >= NOISE_COUNT) n = (n & 0x80) ? 0 : NOISE_COUNT - 1;
         v = NOISE[n] | (c->duty & 8);
     } else {
+        int pcm8 = bank_of(g, c)->version == 3 && osc == OSC_SAMPLE;
+        int vib = 0;
         if (osc == OSC_WAVE) n = (uint8_t)(n + 12);
         if (n >= NOTE_COUNT) n = (n & 0x80) ? 0 : NOTE_COUNT - 1;
         v = (uint16_t)(PERIODS[n] + c->bend + c->t_pitch);
@@ -582,10 +600,18 @@ static void frame_ch(Gbm *g, GbmChan *c)
             if (c->vib_wait) c->vib_wait--;
             else {
                 c->vib_pos = (uint8_t)(c->vib_pos + (c->vib >> 4));
-                v = (uint16_t)(v + VIBRATO[((c->vib_pos >> 2) & 0x0F) | ((c->vib & 0x0F) << 4)]);
+                vib = VIBRATO[((c->vib_pos >> 2) & 0x0F) | ((c->vib & 0x0F) << 4)];
+                v = (uint16_t)(v + vib);
             }
         }
-        if (v & 0x8000) v = 0;
+        if (pcm8) {
+            /* Sample effects use 1/16-semitone steps; the oscillator receives
+               8.8 semitones. Low bass and high leads avoid DMG pitch clamps. */
+            int p = n * 16 + (int16_t)c->bend + c->t_pitch + vib;
+            if (p < 0) p = 0;
+            if (p > (NOTE_COUNT - 1) * 16) p = (NOTE_COUNT - 1) * 16;
+            v = (uint16_t)(p * 16);
+        } else if (v & 0x8000) v = 0;
         else if (v > 2047) v = 2047;
     }
     if (!trig) {
@@ -813,10 +839,11 @@ static void update_block(Gbm *g, uint8_t hw)
     g->ch[hw].block = g->owner[hw] != NO_OWNER || ((g->muted >> hw) & 1) || (hw == 2 && g->pcm_active);
 }
 
-static void bind(Gbm *g, int b, const uint8_t *blob)
+static void bind(Gbm *g, int b, const uint8_t *blob, const uint8_t *samples)
 {
     GbmBank *k = &g->banks[b];
     k->base = blob;
+    k->samples = samples;
     k->ins = blob + U16(blob + 12);
     k->tbl = blob + U16(blob + 14);
     k->wave = blob + U16(blob + 16);
@@ -879,6 +906,7 @@ void gbm_init(Gbm *g, GbApu *apu, Vox *vox)
     g->apu = apu;
     g->vox = vox;
     g->nv = 4;
+    g->frame_cycles = GBM_FRAME_CYCLES;
     g->hold = 0xFF;
     W(g, NR52, 0x80);
     W(g, NR50, 0x77);
@@ -896,13 +924,21 @@ void gbm_init(Gbm *g, GbApu *apu, Vox *vox)
 
 void gbm_play(Gbm *g, const uint8_t *s)
 {
+    gbm_play_bank(g, s, NULL);
+}
+
+void gbm_play_bank(Gbm *g, const uint8_t *s, const uint8_t *samples)
+{
     int i;
+    if (!gbm_sample_bank_match(s, samples)) return;
     g->playing = 0;
     g->paused = 0;
-    bind(g, 0, s);
+    bind(g, 0, s, samples);
+    g->frame_cycles = s[2] == 3 && (s[27] & 128) ? 4194304000u / U32(s + 32) : GBM_FRAME_CYCLES;
     choose_backend(g);
     g->nv = s[2] >= 2 ? (uint8_t)(s[7] < 1 ? 1 : s[7] > GBM_VOICES ? GBM_VOICES : s[7]) : 4;
     if (g->v2) vox_voices(g->vox, g->nv);
+    if (g->v2) vox_output(g->vox, s[2] == 3 && (s[27] & 128) ? U16(s + 36) : 0);
     g->rows = s[3];
     g->order_count = s[4];
     g->loop_order = s[5];
@@ -971,7 +1007,13 @@ void gbm_pause(Gbm *g, uint8_t p)
 
 void gbm_sfx_bank(Gbm *g, const uint8_t *b)
 {
-    bind(g, 1, b);
+    gbm_sfx_bank_samples(g, b, NULL);
+}
+
+void gbm_sfx_bank_samples(Gbm *g, const uint8_t *b, const uint8_t *samples)
+{
+    if (!gbm_sample_bank_match(b, samples)) return;
+    bind(g, 1, b, samples);
     choose_backend(g);
     /* the SFX directory follows the bank's own channel directories */
     g->sfxdir = b + U16(b + U16(b + 10) + (b[2] >= 2 ? b[7] : 4) * 2);
@@ -1048,8 +1090,10 @@ void gbm_volume(Gbm *g, uint8_t level)
 int gbm_check(const uint8_t *s, uint32_t len)
 {
     uint32_t i, dir, nv;
-    if (len < 24 || s[0] != 'G' || s[1] != 'B' || s[2] < 1 || s[2] > 2) return 1;
+    if (len < 24 || s[0] != 'G' || s[1] != 'B' || s[2] < 1 || s[2] > 3) return 1;
     if (s[2] >= 2 && (len < 26 || s[7] < 1 || s[7] > GBM_VOICES)) return 1;
+    if (s[2] == 3 && (len < 32 || (s[27] & 127))) return 1;
+    if (s[2] == 3 && (s[27] & 128) && (len < 40 || U32(s + 32) < 1000 || U32(s + 32) > 1000000)) return 1;
     nv = s[2] >= 2 ? s[7] : 4;
     for (i = 8; i < 24; i += 2) if ((uint32_t)U16(s + i) > len) return 2;
     if (U16(s + 8) + (uint32_t)s[4] * 2 * nv > len) return 3;
@@ -1058,5 +1102,40 @@ int gbm_check(const uint8_t *s, uint32_t len)
     for (i = 0; i <= nv; i++) if ((uint32_t)U16(s + dir + i * 2) >= len) return 4;
     if ((uint32_t)U16(s + 18) + 2 > len || (uint32_t)U16(s + U16(s + 18)) + 2 > len) return 5;
     if (U16(s + 20) + (uint32_t)s[6] * 4 > len) return 6;
+    if (s[2] == 3) {
+        /* Encoded v3 puts the table directory directly after the instruments. */
+        uint32_t ins = U16(s + 12), end = U16(s + 14);
+        if (end < ins || (end - ins) % 16) return 7;
+        for (i = ins; i < end; i += 16)
+            if (s[i] == OSC_SAMPLE && s[i + 10] > s[26]) return 7;
+    }
     return 0;
+}
+
+int gbm_sample_bank_match(const uint8_t *s, const uint8_t *b)
+{
+    if (!s) return 0;
+    if (s[2] != 3) return b == NULL;
+    if (!s[26]) return b == NULL && !U32(s + 28);
+    return b && s[26] == U16(b + 4) && U32(s + 28) == U32(b + 8);
+}
+
+int gbm_sample_bank_check(const uint8_t *b, uint32_t len)
+{
+    uint32_t i, count, header, hash = 2166136261u;
+    if (!b || len < 12 || b[0] != 'G' || b[1] != 'B' || b[2] != 'K' || b[3] != 1) return 1;
+    count = U16(b + 4); header = 12 + count * 24;
+    if (!count || count > 255 || U16(b + 6) || header > len) return 2;
+    for (i = 0; i < count; i++) {
+        const uint8_t *r = b + 12 + i * 24;
+        uint32_t offset = U32(r), n = U32(r + 4), rate = U32(r + 8), root = U32(r + 12);
+        uint32_t a = U32(r + 16), e = U32(r + 20);
+        if (offset < header || offset > len || !n || n > len - offset || n > 0xFFFFFFu) return 3;
+        if (rate < 1000 || rate > 192000 || root < 1000 || root > 20000000u) return 4;
+        if ((e && (a >= e || e > n)) || (!e && a)) return 5;
+    }
+    /* Identity includes metadata and PCM: a same-sized, reordered bank must
+       never silently play the wrong instruments. Checked once, before use. */
+    for (i = 0; i < len; i++) hash = (hash ^ (i >= 8 && i < 12 ? 0 : b[i])) * 16777619u;
+    return hash == U32(b + 8) ? 0 : 6;
 }

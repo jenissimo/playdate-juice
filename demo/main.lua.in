@@ -42,17 +42,30 @@ local SONGS = {
     { id = "neon_acid",     title = "Neon Acid",     style = "Acid - 303 squelch, 808 kit", tag = "v2 6ch" },
     { id = "victory",       title = "Victory",       style = "Fanfare - ends", tag = "v2 5ch" },
     { id = "fade_out",      title = "Fade Out",      style = "Game over - ends", tag = "GB" },
+    { id = "steel_circuit", title = "Steel Circuit", style = "Rock - PCM8 band, acid break", tag = "PCM 8ch", bank = "rock" },
+    { id = "chrome_breaks", title = "Chrome Breaks", style = "Jungle - chopped drums, reese", tag = "PCM 8ch", bank = "rock" },
+    { id = "prism_drive",   title = "Prism Drive",   style = "Trance - supersaw, offbeat bass", tag = "PCM 8ch", bank = "rock" },
+    { id = "studio_menu",  title = "Studio Menu",  style = "Original rock arrangement - 140 BPM", tag = "PCM A/B", bank = "studio", reference = true },
+    { id = "studio_play",  title = "Studio Play",  style = "Original table theme - 132 BPM", tag = "PCM A/B", bank = "studio", reference = true },
+    { id = "studio_multi", title = "Studio Multi", style = "Original multiball theme - 166 BPM", tag = "PCM A/B", bank = "studio", reference = true },
 }
 local songPaths = {}
-for _, s in ipairs(SONGS) do songPaths[s.id] = "music/" .. s.id .. ".gbm" end
+for _, s in ipairs(SONGS) do
+    local path = "music/" .. s.id .. ".gbm"
+    songPaths[s.id] = s.bank and { path = path, bank = s.bank } or path
+end
 local chipOk, chipErr = Chiptune.load({ songs = songPaths, sfx = "music/sfx.gbm",
+                                        banks = { rock = "music/rock.gbank", studio = "music/overturn.gbank" },
                                         duck = { amount = 6, speed = 2 }, volume = 0.8 })
 if not chipOk then print(chipErr) end
 
 -- Pre-rendered by build_demo.py (tools/chiptune.py render): the same music
 -- as files, for the Jukebox exhibit and for games without the C extension.
-Jukebox.load({ tracks = { surf = "jukebox/tidal_twang", waltz = "jukebox/willow_lane" },
-               volumes = { surf = 0.7, waltz = 0.7 } })
+local streamPaths, streamVolumes = {}, {}
+for _, s in ipairs(SONGS) do
+    streamPaths[s.id], streamVolumes[s.id] = "jukebox/" .. s.id, 0.8
+end
+Jukebox.load({ tracks = streamPaths, volumes = streamVolumes })
 
 -- A named chiptune effect (silent without the extension).
 local function blip(name) Chiptune.sfx(name) end
@@ -218,9 +231,9 @@ local EXHIBITS = {
     { id = "backgrounds", name = "Backgrounds",       blurb = "17 looping procedural backgrounds",   fx = "Dissolve" },
     { id = "tween",       name = "Tween",             blurb = "31 easings, springs, sequences",      fx = "Slide" },
     { id = "impact",      name = "Shake & Particles", blurb = "Trauma shake, pooled 1-bit particles", fx = "Shatter" },
-    { id = "music",       name = "Chiptune: Music",   blurb = "9 songs: Game Boy and 8-voice SID-style", fx = "Scanline" },
+    { id = "music",       name = "Chiptune: Music",   blurb = "15 songs: Game Boy, SID and PCM band", fx = "Scanline" },
     { id = "sfx",         name = "Chiptune: SFX",     blurb = "84 effects that duck the music",      fx = "Pixel Shift" },
-    { id = "jukebox",     name = "Jukebox",           blurb = "Streamed files, crossfades, ducking", fx = "Fade" },
+    { id = "jukebox",     name = "Jukebox",           blurb = "Three sounds: live tracker or stream", fx = "Fade" },
 }
 local hubSel = 1
 local hubSpring = Tween.newSpring(0, 3)
@@ -547,7 +560,7 @@ do
         end,
         draw = function()
             gfx.clear(gfx.kColorWhite)
-            header("Chiptune: Music", chipOk and "GBM driver, DMG APU" or "C extension not built")
+            header("Chiptune: Music", chipOk and "GB / SID / PCM" or "C extension not built")
             list(SONGS, sel, 10, 30, 180, 16, 9, spring, function(s) return s.title .. "  " .. s.tag end)
             gfx.setFont(fontBold)
             gfx.drawTextInRect(SONGS[sel].style, 10, 180, 185, 36)
@@ -662,51 +675,73 @@ end
 -- ─── jukebox ───────────────────────────────────────────────────────────────
 
 do
-    local playing = "surf"
+    local sel, playing = 13, 13
+    local mode = "live"
+    local spring = Tween.newSpring(0, 3)
     local ok = true
-    local ducked = false
+    local function start()
+        local id = SONGS[sel].id
+        if mode == "live" then
+            Jukebox.stop()
+            ok = Chiptune.play(id, { restart = true })
+        else
+            Chiptune.stop()
+            local prev = Jukebox.current()
+            if prev and prev ~= id then
+                Jukebox.switch(prev, id, 0.35, 0.35)
+                ok = true
+            else
+                ok = Jukebox.play(id)
+            end
+        end
+        playing = sel
+    end
     scenes.jukebox = {
         enter = function()
-            Chiptune.stop()
-            ok = Jukebox.play(playing)
+            if not chipOk then mode = "stream" end
+            start()
         end,
-        leave = function() Jukebox.stop() end,
+        leave = function() Jukebox.stop(); Chiptune.stop() end,
         input = function()
-            if pressed(A) and ok then
-                local to = playing == "surf" and "waltz" or "surf"
-                Jukebox.switch(playing, to, 0.6, 0.6)
-                playing = to
-                blip("select")
+            sel = navigate(sel, #SONGS)
+            if pressed(A) then start() end
+            if pressed(LEFT) or pressed(RIGHT) then
+                mode = mode == "live" and "stream" or "live"
+                Jukebox.stop(); Chiptune.stop(); start()
             end
-            if pressed(UP) then Jukebox.duck(nil, 0.2); ducked = true end
-            if pressed(DOWN) then Jukebox.restore(0.6); ducked = false end
             if pressed(B) then go("hub", "Fade", "back") end
         end,
         update = function() end,
         draw = function()
             gfx.clear(gfx.kColorWhite)
-            header("Jukebox", "streamed music")
-            gfx.setFont(fontTitle)
-            if not ok then
-                gfx.drawTextInRect("No tracks: build_demo.py renders them with tools/chiptune.py.", 20, 60, 360, 60)
-            else
-                gfx.drawText("Now: " .. (Jukebox.current() == "surf" and "Tidal Twang" or "Willow Lane"), 20, 40)
-                gfx.setFont(fontBold)
-                gfx.drawText(ducked and "ducked" or "full volume", 20, 64)
-            end
+            header("Jukebox", mode == "live" and "LIVE TRACKER" or SONGS[playing].reference and "STUDIO REFERENCE" or "ADPCM STREAM")
+            list(SONGS, sel, 10, 30, 192, 16, 10, spring, function(s) return s.title .. "  " .. s.tag end)
             gfx.setFont(fontBold)
-            gfx.drawTextInRect("The same chiptune songs, rendered to ADPCM files at build time " ..
-                               "(tools/chiptune.py render-all): how a game plays this music without " ..
-                               "the C extension. A crossfade runs on the fileplayer's own fade, on " ..
-                               "the audio thread.", 20, 96, 360, 110)
-            footer("A crossfade   up duck   down restore   B back")
+            gfx.drawTextInRect(SONGS[sel].style, 10, 194, 192, 28)
+            panel(211, 30, 179, 171)
+            gfx.setFont(fontTitle)
+            gfx.drawText("Now playing", 222, 42)
+            gfx.setFont(fontBold)
+            gfx.drawTextInRect(SONGS[playing].title, 222, 65, 158, 28)
+            if not ok then
+                gfx.drawTextInRect("Track unavailable. Try the other playback mode.", 222, 100, 154, 80)
+            elseif mode == "live" then
+                local order, row = Chiptune.position()
+                gfx.setFont(fontMono)
+                gfx.drawText(string.format("order %02d row %02d", order, row), 222, 96)
+                meters(222, 119, 54, nil, nil, 156)
+            else
+                gfx.drawTextInRect(SONGS[playing].reference and "The original studio master, for listening A/B." or
+                    "The same arrangement, streamed from a rendered audio loop.", 222, 105, 154, 80)
+            end
+            footer("up/down track   A play   left/right live/stream   B back")
         end,
     }
 end
 
 -- ─── the loop ──────────────────────────────────────────────────────────────
 
-scenes.hub.enter()
+scenes[current].enter()
 
 function playdate.update()
     trackHeld()

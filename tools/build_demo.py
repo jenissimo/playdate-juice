@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the demo (the Zoo) .pdx.
 
-    python tools/build_demo.py [--lua-only] [--no-device]
+    python tools/build_demo.py [--lua-only] [--no-device] [--jukebox]
 
 The library modules live at the repo ROOT so that a consumer can add this repo
 as a submodule straight inside their Source/ and `import "juice/tween"`. pdc,
@@ -17,7 +17,7 @@ only copied in at demo-build time.
 
 On top of the Lua, the Zoo stages:
   music/     chiptune/music/*.gbm, the songs and the SFX bank;
-  jukebox/   two songs pre-rendered to ADPCM WAV, for the Jukebox exhibit
+  jukebox/   twelve tracker renders and three original studio masters as ADPCM WAV
              (needs a host C compiler; skipped without one);
   pdex.*     the chiptune C extension, built with CMake: for the simulator
              with the host compiler, and for the device when arm-none-eabi-gcc
@@ -39,7 +39,10 @@ MODULES = [
     "transitions.lua", "jukebox.lua", "chiptune.lua",
     "tween.lua", "shake.lua", "particles.lua", "backgrounds.lua",
 ]
-JUKEBOX_SONGS = ["tidal_twang", "willow_lane"]
+JUKEBOX_SONGS = ["cloud_garden", "tidal_twang", "jungle_pulse", "crimson_clash", "willow_lane",
+                "hollow_deep", "neon_acid", "victory", "fade_out",
+                "steel_circuit", "chrome_breaks", "prism_drive"]
+STUDIO_SONGS = {"studio_menu": "menu", "studio_play": "play", "studio_multi": "multi"}
 
 
 def find_sdk():
@@ -111,14 +114,26 @@ def render_jukebox(dst):
         return
     os.makedirs(dst, exist_ok=True)
     for song in JUKEBOX_SONGS:
+        bank_args = ["--bank", os.path.join(ROOT, "chiptune", "music", "rock.gbank")] if song in (
+            "steel_circuit", "chrome_breaks", "prism_drive") else []
         subprocess.run([exe, os.path.join(ROOT, "chiptune", "music", song + ".gbm"),
-                        os.path.join(dst, song + ".wav"), "--loops", "2", "--mono", "--adpcm", "--rate", "22050"],
+                        os.path.join(dst, song + ".wav"), "--loops", "2", "--mono", "--adpcm", "--rate", "22050"] + bank_args,
+                       check=True, stdout=subprocess.DEVNULL)
+    node = shutil.which('node')
+    if not node:
+        sys.exit('node is required for the studio A/B reference tracks')
+    for song, name in STUDIO_SONGS.items():
+        subprocess.run([node, os.path.join(ROOT, 'chiptune', 'studio', 'render.cjs'),
+                        os.path.join(ROOT, 'chiptune', 'studio', 'songs', 'overturn_rock.cjs'),
+                        '--only', name, '--out', dst, '--prefix', 'studio_', '--adpcm'],
                        check=True, stdout=subprocess.DEVNULL)
 
 
 def main():
     lua_only = "--lua-only" in sys.argv
     device = "--no-device" not in sys.argv
+    jukebox = "--jukebox" in sys.argv
+    out = os.path.join(DEMO_DIR, "Juice-Tracker.pdx") if jukebox else OUT
     sdk = find_sdk()
     staged = []
     staged_dirs = []
@@ -135,6 +150,11 @@ def main():
             if f.endswith(".lua.in"):
                 dst = os.path.join(DEMO, f[:-3])      # strip the ".in"
                 shutil.copy2(os.path.join(DEMO_DIR, f), dst)
+                if jukebox and f == 'main.lua.in':
+                    with open(dst, encoding='utf-8') as source:
+                        text = source.read().replace('local current = "hub"', 'local current = "jukebox"')
+                    with open(dst, 'w', encoding='utf-8') as source:
+                        source.write(text)
                 staged.append(dst)
 
         # The paw effect loads images/ from the pdx root by the same relative
@@ -153,10 +173,10 @@ def main():
 
         pdc = find_pdc(sdk)
         print("pdc:", pdc)
-        r = subprocess.run([pdc, "-sdkpath", sdk, DEMO, OUT])
+        r = subprocess.run([pdc, "-sdkpath", sdk, DEMO, out])
         if r.returncode != 0:
             sys.exit(r.returncode)
-        print("built", OUT)
+        print("built", out)
     finally:
         for c in staged:
             if os.path.isfile(c):

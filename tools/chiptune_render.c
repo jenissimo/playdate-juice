@@ -18,6 +18,7 @@
 #include <string.h>
 #include <time.h>
 #include "../chiptune/chip.h"
+#include "../chiptune/bank_codec.h"
 
 static uint8_t *slurp(const char *path, long *len)
 {
@@ -29,6 +30,21 @@ static uint8_t *slurp(const char *path, long *len)
     if (fread(b, 1, *len, f) != (size_t)*len) { fclose(f); free(b); return NULL; }
     fclose(f);
     return b;
+}
+
+static uint8_t *load_samples(const char *path)
+{
+    long len;
+    uint8_t *input = slurp(path, &len), *out;
+    uint32_t size;
+    void *workspace;
+    if (!input || len <= 0 || len > UINT32_MAX || !(size = bank_raw_size(input, (uint32_t)len))) { free(input); return NULL; }
+    out = malloc(size);
+    workspace = input[2] == 'Z' ? malloc(bank_workspace_size()) : NULL;
+    if (!out || (input[2] == 'Z' && !workspace) || bank_unpack(input, (uint32_t)len, out, size, workspace) || gbm_sample_bank_check(out, size)) {
+        free(out); out = NULL;
+    }
+    free(input); free(workspace); return out;
 }
 
 static void put16(FILE *f, int v) { fputc(v & 255, f); fputc((v >> 8) & 255, f); }
@@ -120,7 +136,9 @@ int main(int argc, char **argv)
     const char *in = NULL, *out = NULL;
     int loops = 1, sfx = -1, mono = 0, adpcm = 0, from = 0, mute = 0, bench = 0, i;
     const char *with = NULL;
+    const char *samples_path = NULL, *with_samples_path = NULL;
     uint8_t *bank = NULL;
+    uint8_t *samples = NULL, *with_samples = NULL;
     double seconds = 0;
     uint32_t rate = 44100, cap, n = 0;
     long len;
@@ -137,6 +155,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mono")) mono = 1;
         else if (!strcmp(argv[i], "--bench")) bench = 1;
         else if (!strcmp(argv[i], "--with") && i + 1 < argc) with = argv[++i];
+        else if (!strcmp(argv[i], "--bank") && i + 1 < argc) samples_path = argv[++i];
+        else if (!strcmp(argv[i], "--with-bank") && i + 1 < argc) with_samples_path = argv[++i];
         else if (!strcmp(argv[i], "--adpcm")) adpcm = 1;
         else if (!in) in = argv[i];
         else if (!out) out = argv[i];
@@ -146,21 +166,29 @@ int main(int argc, char **argv)
         return 2;
     }
     if (!(blob = slurp(in, &len)) || gbm_check(blob, (uint32_t)len)) { fprintf(stderr, "%s: not a GBM blob\n", in); return 1; }
+    if (samples_path && !(samples = load_samples(samples_path))) {
+        fprintf(stderr, "%s: not a sample bank\n", samples_path); return 1;
+    }
+    if (!gbm_sample_bank_match(blob, samples)) { fprintf(stderr, "%s: missing or mismatched --bank\n", in); return 1; }
     chip_init(&chip, rate);
     /* --with BANK: load an SFX bank first, as a game would -- a format-2
        bank moves a format-1 song onto vox, and this hears it there. */
     if (with) {
         long blen;
         if (!(bank = slurp(with, &blen)) || gbm_check(bank, (uint32_t)blen)) { fprintf(stderr, "%s: not a GBM blob\n", with); return 1; }
-        chip_post(&chip, CHIP_SFX_BANK, 0, 0, bank);
+        if (with_samples_path && !(with_samples = load_samples(with_samples_path))) {
+            fprintf(stderr, "%s: not a sample bank\n", with_samples_path); return 1;
+        }
+        if (!gbm_sample_bank_match(bank, with_samples)) { fprintf(stderr, "%s: missing or mismatched --with-bank\n", with); return 1; }
+        chip_post_bank(&chip, CHIP_SFX_BANK, 0, 0, bank, with_samples);
     }
     if (sfx >= 0) {
         if (sfx >= blob[6]) { fprintf(stderr, "%s has %d effects\n", in, blob[6]); return 1; }
-        chip_post(&chip, CHIP_SFX_BANK, 0, 0, blob);
+        chip_post_bank(&chip, CHIP_SFX_BANK, 0, 0, blob, samples);
         chip_post(&chip, CHIP_SFX, (uint8_t)sfx, 0, NULL);
     } else {
         if (!blob[4]) { fprintf(stderr, "%s has no song, only effects: use --sfx\n", in); return 1; }
-        chip_post(&chip, CHIP_PLAY, (uint8_t)from, 0, blob);
+        chip_post_bank(&chip, CHIP_PLAY, (uint8_t)from, 0, blob, samples);
         if (mute) chip_post(&chip, CHIP_MUTE, (uint8_t)mute, 0, NULL);
     }
     if (bench) {

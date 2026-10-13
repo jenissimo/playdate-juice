@@ -1,0 +1,1024 @@
+{
+ "bank": "overturn.gbank",
+ "bank_bytes": 410653,
+ "bank_ram_bytes": 719662,
+ "codec_workspace_bytes": 263168,
+ "source_hashes": {
+  "chiptune/studio/songs/overturn_rock.cjs": "341e0b4a5885ffd842cc1ad3779c42909b3c5813e2eab8acd812d965b0cf2d48",
+  "chiptune/studio/instruments.cjs": "6e167bb41bdff36345ff35ef7cfcdbe1612adf5dc747ada62019bb76ae22df33",
+  "chiptune/studio/compose.cjs": "c2154f103255a09db67c5615c413926bb9535ceb60aa0d4978e6ed29ea17ffa6",
+  "chiptune/studio/synth.cjs": "67b102c95d7f1c59403a8f27de79483b89a3133191b496c8de3bdbd0cef7c493",
+  "chiptune/studio/master.cjs": "2f215efc43a6cf52c0a93575703c285f7c6a78baa22ea908f70dfa1d39475fb0",
+  "chiptune/studio/export_tracker.cjs": "7325ba63eb53c25301ad1b7a6f2be2ce8a1fbb2c75d4ef4637a0d5dd1b9d69d5",
+  "chiptune/studio/prepare_tracker.cjs": "cbb21b9c0e4831d29526ff291f838d8b25d639cfa9db6da3cc0c86e89f7ceed8",
+  "tools/studio_port.py": "dc7b2148fbd1665086cdeeb9ab243cc2531bb8a51c30bc0d808b8f9b969497a6",
+  "tools/gbm_bank_codec.py": "06da4803b4f8ac52d2142ce9ee09ed902dca14b8644fc14da254e22d0f5aac58"
+ },
+ "asset_hashes": {
+  "overturn.gbank": "cb1dc03fb1415ec89ac7666500f74e3ef13497ca6f11ca2e8e0344104db5e438",
+  "studio_menu.gbm": "90e1338d77e0fcb71eee6f114cc2e341c37938f7ac8be3f3b71a827f98744629",
+  "studio_play.gbm": "8a23f53de08f3ac566a72e1567babcac1a8cec292d716abb97b8efd67f65a0ff",
+  "studio_multi.gbm": "3a5e4325992047abc9c7cf8244ead039adbe72deced5e7da6956823f5619fdf2"
+ },
+ "songs": {
+  "menu": {
+   "name": "menu",
+   "bpm": 140,
+   "tickRate": 56.0,
+   "rows": 256,
+   "notes_checked": 780,
+   "lengths_checked": 267,
+   "layered_events": 96,
+   "dropped": [
+    {
+     "stem": "riser",
+     "step": 160,
+     "inst": "I.riser",
+     "len": 3.4285714285714284,
+     "gain": 1,
+     "id": 508,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "gtr2",
+     "step": 192,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 656,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 198,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 679,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 204,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.42857142857142855,
+     "up": false,
+     "gain": 1,
+     "id": 701,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 208,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 716,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 214,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 738,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 220,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.42857142857142855,
+     "up": false,
+     "gain": 1,
+     "id": 760,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 224,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 775,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 230,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6428571428571428,
+     "up": false,
+     "gain": 1,
+     "id": 797,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 236,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.42857142857142855,
+     "up": false,
+     "gain": 1,
+     "id": 819,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    }
+   ],
+   "bank_bytes": 410653,
+   "bank_ram_bytes": 719662,
+   "mix_gain": 0.9438107203342858,
+   "lane_gains": [
+    0.989271507124524,
+    1.04781797326426,
+    1.1264860159427417,
+    1.0022451897192017,
+    1.2442604139413627,
+    3.1999891376112104,
+    1.0228421427717351,
+    1.2041295784343917
+   ],
+   "comparison": {
+    "source": {
+     "peak": -1.0001519038193567,
+     "rms": -14.213475841927497,
+     "lufs": -14.550285959791974,
+     "speaker": -4.686264372638348,
+     "bands": [
+      -9.308782835730097,
+      -7.477500013240785,
+      -7.009721902592579,
+      -10.420909255742963,
+      -15.940930826953396,
+      -17.484389679575514
+     ],
+     "spread50ms": 3.534654624871804
+    },
+    "port": {
+     "peak": -1.0004493301428765,
+     "rms": -14.147631725461755,
+     "lufs": -14.569694560506374,
+     "speaker": -4.939272024526737,
+     "bands": [
+      -7.648411896955137,
+      -7.65538437629921,
+      -8.035726784818864,
+      -10.454146559083195,
+      -14.953901434588682,
+      -18.706101805836763
+     ],
+     "spread50ms": 4.159899129882426
+    },
+    "delta": {
+     "lufs": -0.019408600714399427,
+     "bands": [
+      1.6603709387749603,
+      -0.1778843630584248,
+      -1.0260048822262853,
+      -0.03323730334023267,
+      0.9870293923647147,
+      -1.2217121262612487
+     ]
+    },
+    "pass": true
+   }
+  },
+  "play": {
+   "name": "play",
+   "bpm": 132,
+   "tickRate": 52.8,
+   "rows": 512,
+   "notes_checked": 1496,
+   "lengths_checked": 493,
+   "layered_events": 148,
+   "dropped": [
+    {
+     "stem": "pad",
+     "step": 256,
+     "inst": "G.pad",
+     "ns": [
+      62,
+      65,
+      69
+     ],
+     "d": 3.5227272727272725,
+     "gain": 1,
+     "id": 832,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "pad",
+     "step": 288,
+     "inst": "G.pad",
+     "ns": [
+      60,
+      65,
+      69
+     ],
+     "d": 3.5227272727272725,
+     "gain": 1,
+     "id": 870,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "pad",
+     "step": 320,
+     "inst": "G.pad",
+     "ns": [
+      58,
+      62,
+      65
+     ],
+     "d": 3.409090909090909,
+     "gain": 1,
+     "id": 913,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "riser",
+     "step": 352,
+     "inst": "I.riser",
+     "len": 3.409090909090909,
+     "gain": 1,
+     "id": 1061,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "acid",
+     "step": 320,
+     "inst": "G.acid",
+     "n": 46,
+     "d": 0.09659090909090909,
+     "acc": 0.44999999999999996,
+     "gain": 1,
+     "id": 916,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 322,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.15,
+     "gain": 1,
+     "id": 924,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 324,
+     "inst": "G.acid",
+     "n": 53,
+     "d": 0.09659090909090909,
+     "acc": 0.15,
+     "gain": 1,
+     "id": 932,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 326,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.44999999999999996,
+     "gain": 1,
+     "id": 939,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 328,
+     "inst": "G.acid",
+     "n": 46,
+     "d": 0.09659090909090909,
+     "acc": 0.44999999999999996,
+     "gain": 1,
+     "id": 947,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 330,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.15,
+     "gain": 1,
+     "id": 955,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 332,
+     "inst": "G.acid",
+     "n": 53,
+     "d": 0.09659090909090909,
+     "acc": 0.15,
+     "gain": 1,
+     "id": 964,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 334,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.44999999999999996,
+     "gain": 1,
+     "id": 972,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 336,
+     "inst": "G.acid",
+     "n": 46,
+     "d": 0.09659090909090909,
+     "acc": 0.6699999999999999,
+     "gain": 1,
+     "id": 980,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 338,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.37,
+     "gain": 1,
+     "id": 989,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 340,
+     "inst": "G.acid",
+     "n": 53,
+     "d": 0.09659090909090909,
+     "acc": 0.37,
+     "gain": 1,
+     "id": 1000,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 342,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.6699999999999999,
+     "gain": 1,
+     "id": 1009,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 344,
+     "inst": "G.acid",
+     "n": 46,
+     "d": 0.09659090909090909,
+     "acc": 0.6699999999999999,
+     "gain": 1,
+     "id": 1019,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 346,
+     "inst": "G.acid",
+     "n": 58,
+     "d": 0.09659090909090909,
+     "acc": 0.37,
+     "gain": 1,
+     "id": 1030,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 348,
+     "inst": "G.acid",
+     "n": 53,
+     "d": 0.09659090909090909,
+     "acc": 0.37,
+     "gain": 1,
+     "id": 1042,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "acid",
+     "step": 350,
+     "inst": "G.acid",
+     "n": 60,
+     "d": 0.09659090909090909,
+     "acc": 0.6699999999999999,
+     "gain": 1,
+     "id": 1053,
+     "lane": 7,
+     "reason": "simultaneous higher-priority clean"
+    },
+    {
+     "stem": "gtr2",
+     "step": 384,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1213,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 390,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1237,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 396,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.45454545454545453,
+     "up": false,
+     "gain": 1,
+     "id": 1260,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 400,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1278,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 406,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1299,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 416,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1336,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 422,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1359,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 428,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.45454545454545453,
+     "up": false,
+     "gain": 1,
+     "id": 1382,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 432,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1400,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 438,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1421,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 448,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1461,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 454,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1485,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 460,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.45454545454545453,
+     "up": false,
+     "gain": 1,
+     "id": 1508,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 464,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1526,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 470,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1547,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 476,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.45454545454545453,
+     "up": false,
+     "gain": 1,
+     "id": 1570,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 480,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1588,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 486,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.6818181818181818,
+     "up": false,
+     "gain": 1,
+     "id": 1611,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 492,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.45454545454545453,
+     "up": false,
+     "gain": 1,
+     "id": 1634,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    }
+   ],
+   "bank_bytes": 410653,
+   "bank_ram_bytes": 719662,
+   "mix_gain": 1.0393825039863722,
+   "lane_gains": [
+    1.0075473040602054,
+    1.0136436791722458,
+    1.1082065944232773,
+    1.003483463313067,
+    1.273565840691211,
+    3.499011077712463,
+    1.0188524164452197,
+    1.232704058143576
+   ],
+   "comparison": {
+    "source": {
+     "peak": -1.0001519038193567,
+     "rms": -14.040708692696583,
+     "lufs": -14.542559034104665,
+     "speaker": -5.596216561919039,
+     "bands": [
+      -8.852496310676042,
+      -6.828328041324296,
+      -7.179240224049691,
+      -11.687073734007862,
+      -16.49814571674049,
+      -17.733424271320246
+     ],
+     "spread50ms": 4.22035882945775
+    },
+    "port": {
+     "peak": -1.0004493301428765,
+     "rms": -14.003960027141641,
+     "lufs": -14.594190121319354,
+     "speaker": -5.56865321944421,
+     "bands": [
+      -7.29962770563027,
+      -7.162741331257631,
+      -8.157132024507527,
+      -11.307751902118174,
+      -15.584587702528836,
+      -19.030708937566324
+     ],
+     "spread50ms": 4.7049739445341565
+    },
+    "delta": {
+     "lufs": -0.05163108721468923,
+     "bands": [
+      1.5528686050457718,
+      -0.33441328993333475,
+      -0.9778918004578365,
+      0.3793218318896887,
+      0.9135580142116524,
+      -1.2972846662460782
+     ]
+    },
+    "pass": true
+   }
+  },
+  "multi": {
+   "name": "multi",
+   "bpm": 166,
+   "tickRate": 66.4,
+   "rows": 256,
+   "notes_checked": 855,
+   "lengths_checked": 398,
+   "layered_events": 83,
+   "dropped": [
+    {
+     "stem": "riser",
+     "step": 160,
+     "inst": "I.riser",
+     "len": 2.891566265060241,
+     "gain": 1,
+     "id": 576,
+     "lane": -1,
+     "reason": "no lane for optional layer"
+    },
+    {
+     "stem": "gtr2",
+     "step": 192,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 708,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 196,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 728,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 200,
+     "inst": "G.chord",
+     "n": 62,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 745,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 204,
+     "inst": "G.chord",
+     "n": 63,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 764,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 206,
+     "inst": "G.chord",
+     "n": 62,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 772,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 208,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 780,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 212,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 797,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 216,
+     "inst": "G.chord",
+     "n": 55,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 814,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 220,
+     "inst": "G.chord",
+     "n": 53,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 831,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 222,
+     "inst": "G.chord",
+     "n": 52,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 839,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 224,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 846,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 228,
+     "inst": "G.chord",
+     "n": 60,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 865,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 232,
+     "inst": "G.chord",
+     "n": 62,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 882,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 236,
+     "inst": "G.chord",
+     "n": 63,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 901,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 238,
+     "inst": "G.chord",
+     "n": 62,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 909,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    },
+    {
+     "stem": "gtr2",
+     "step": 240,
+     "inst": "G.chord",
+     "n": 57,
+     "d": 0.18072289156626506,
+     "up": false,
+     "gain": 1,
+     "id": 917,
+     "lane": 7,
+     "reason": "simultaneous higher-priority lead2"
+    }
+   ],
+   "bank_bytes": 410653,
+   "bank_ram_bytes": 719662,
+   "mix_gain": 0.8466940739597086,
+   "lane_gains": [
+    0.9959158487278418,
+    1.0156848077472445,
+    1.1475594446940238,
+    1.00604029991918,
+    1.3094325121777726,
+    3.271211258073891,
+    1.0212676421241302,
+    1.2061945688100144
+   ],
+   "comparison": {
+    "source": {
+     "peak": -1.0001519038193567,
+     "rms": -14.335664806882473,
+     "lufs": -14.511901341085242,
+     "speaker": -4.29708294498108,
+     "bands": [
+      -10.543524352636807,
+      -7.261883451368414,
+      -7.254995902105411,
+      -9.84412240457872,
+      -15.182650774130835,
+      -17.80752324359463
+     ],
+     "spread50ms": 2.60432119118866
+    },
+    "port": {
+     "peak": -1.0004493301428765,
+     "rms": -14.36168280638931,
+     "lufs": -14.549858530852747,
+     "speaker": -4.526877965803175,
+     "bands": [
+      -8.994888180759123,
+      -7.264937921019303,
+      -8.26123218193349,
+      -10.008713381761803,
+      -13.987751413048972,
+      -18.74624365627887
+     ],
+     "spread50ms": 3.959708111494068
+    },
+    "delta": {
+     "lufs": -0.037957189767505284,
+     "bands": [
+      1.5486361718776838,
+      -0.003054469650889402,
+      -1.0062362798280793,
+      -0.16459097718308335,
+      1.1948993610818626,
+      -0.9387204126842406
+     ]
+    },
+    "pass": true
+   }
+  }
+ }
+}

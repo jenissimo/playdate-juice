@@ -12,7 +12,7 @@ plus a C extension (`chiptune/`).
 |---|---|---|
 | `transitions.lua` | `Transitions` | 23 direction-aware scene transitions + a scene-hop plan |
 | `jukebox.lua` | `Jukebox` | streamed music: crossfades, ducking, pause handling |
-| `chiptune.lua` + `chiptune/` | `Chiptune` | tracker music and SFX: a C port of a real Game Boy driver, plus an 8-voice SID-style mode; 9 songs, 84 effects |
+| `chiptune.lua` + `chiptune/` | `Chiptune` | Game Boy, 8-voice SID-style and studio PCM tracker music; 15 songs, 84 effects |
 | `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs — zero per-frame allocation |
 | `shake.lua` | `Shake` | trauma-based screen shake with deterministic noise |
 | `particles.lua` | `Particles` | pooled 1-bit particle system |
@@ -115,15 +115,25 @@ Chiptune.mute({ "wav" })      -- the song keeps time
 
 GBM, a tracker driver for the original Game Boy, ported from SM83 assembly to
 C and run inside the audio callback, so the tempo never depends on your frame
-rate. Two formats: format 1 is four Game Boy channels on an emulated DMG APU,
+rate. Three formats: format 1 is four Game Boy channels on an emulated DMG APU,
 held to the original driver write for write (173,000 APU writes match the
 original ROM's in an emulator); format 2 goes past the Game Boy with up to 8
 voices, an oscillator per instrument that a table can switch frame by frame
 (SID drums), PWM, ring modulation, hard sync and a resonant filter. It ships
-with nine songs, each a style and a set of chiptune techniques -- sampled and
+with fifteen songs, each a style and a set of chiptune techniques -- sampled and
 synthesised drums, arpeggio chords, a 303 acid line, a sync lead, a
 ring-modulated bell, a reese bass, tremolo by retrigger -- and an 84-effect SFX
 library (a set of game sounds, and a whoosh each way for every transition), all written as code you can read and change.
+
+Format 3 adds studio instruments: guitars through an amp, drums, supersaws
+and pads as interpolated PCM8 with sustain loops, played live by the same
+driver. Three new themes -- rock, jungle and trance -- share a 203 KiB bank.
+`python tools/chiptune.py studio` rebuilds them;
+`python tools/build_demo.py --jukebox` builds a demo starting in the player,
+with live/ADPCM switching.
+The original studio menu/play/multi arrangements are also ported, with exact
+musical clocks, release overlaps and mastering. Their shared bank is 401 KiB
+on disk (703 KiB decoded); the demo offers A/B with the original studio mix.
 
 It needs its C half built into the game (a few lines of CMake). Without it,
 `tools/chiptune.py render-all` turns the same music into ADPCM files for

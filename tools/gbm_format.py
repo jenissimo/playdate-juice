@@ -7,6 +7,7 @@ the encoder is tested byte for byte against blobs the original produced
 (test/chiptune/golden). Format 2 (`"version": 2` in the project) is this
 repo's extension: 1-8 voices, an oscillator per instrument, width, PWM,
 ring, sync, a filter. Layout reference: chiptune/README.md.
+Format 3 shares that layout and adds the identity of an external PCM8 bank.
 
 One addition, after the blob where the driver never looks: the SFX names,
 so a game can say Chiptune.sfx("coin") instead of an index.
@@ -20,6 +21,7 @@ FX = dict(ARP=0x0, SLIDE_UP=0x1, SLIDE_DOWN=0x2, PORTA=0x3, VIBRATO=0x4, ENVELOP
 NOTE_OFF = -1
 HEADER = 24
 HEADER_V2 = 26
+HEADER_V3 = 32
 
 # Format 2's oscillators, and its extended commands (encoded 0xF1 cmd val).
 OSC = dict(pulse=0, wave=1, noise=2, sample=3, triangle=4, saw=5)
@@ -114,6 +116,18 @@ def pcm_frame(data, at):
 
 def validate(song):
     e = []
+    if song.get('version', 1) not in (1, 2, 3):
+        e.append('version must be 1, 2 or 3')
+    if song.get('version') == 3:
+        bank = song.get('sampleBank') or {}
+        count = bank.get('count', 0)
+        h = bank.get('hash', 0)
+        if not 0 <= count <= 255 or not 0 <= h <= 0xFFFFFFFF or (count and 'hash' not in bank) or (not count and h):
+            e.append('format 3 needs the sample bank count and identity')
+        if song.get('samples'):
+            e.append('format 3 samples live in an external bank')
+        if not 1 <= song.get('tickRate', 59.7275) <= 1000 or not 0 <= song.get('mixGain', 0) < 256:
+            e.append('invalid format-3 tick rate or mix gain')
     rows = song['rows']
     if rows < 1 or rows > 255:
         e.append(f'rows {rows} out of 1-255')
@@ -154,10 +168,13 @@ def validate(song):
         if len(t['rows']) > 42:
             e.append(f"table {i}: {len(t['rows'])} rows, at most 42")
     for i, ins in enumerate(song['instruments']):
+        if song.get('version') == 3 and (not 0 <= ins.get('release', 0) <= 255 or not 0 <= round(ins.get('mixGain', 0) * 256) <= 65535):
+            e.append(f'instrument {i}: invalid release or mix gain')
         if ins.get('table', -1) >= len(song['tables']):
             e.append(f"instrument {i}: no table {ins['table']}")
         smp = ins.get('sample')
-        if smp is not None and smp >= 0 and smp >= len(song.get('samples') or []):
+        count = (song.get('sampleBank') or {}).get('count', 0) if song.get('version') == 3 else len(song.get('samples') or [])
+        if smp is not None and ((song.get('version') == 3 and smp < 0) or smp >= count):
             e.append(f'instrument {i}: no sample {smp}')
         if ins.get('osc', ins['kind']) == 'wave' and ins['duty'] >= len(song['waves']):
             e.append(f"instrument {i}: no wave {ins['duty']}")
@@ -169,15 +186,26 @@ def encode_song(song, names=False):
     if errors:
         raise ValueError('Song is invalid:\n' + '\n'.join(errors))
     v2 = song.get('version', 1) >= 2
+    v3 = song.get('version') == 3
+    extended = v3 and ('tickRate' in song or 'mixGain' in song)
     nv = song.get('voices', 4) if v2 else 4
-    out = [0] * (HEADER_V2 if v2 else HEADER)
+    out = [0] * (40 if extended else HEADER_V3 if v3 else HEADER_V2 if v2 else HEADER)
 
     def w16(at, v):
         out[at] = v & 255
         out[at + 1] = v >> 8
 
     here = lambda: len(out)
-    out[0], out[1], out[2] = 0x47, 0x42, 2 if v2 else 1
+    out[0], out[1], out[2] = 0x47, 0x42, 3 if v3 else 2 if v2 else 1
+    if v3:
+        bank = song.get('sampleBank') or {}
+        w16(26, bank.get('count', 0) | (0x8000 if extended else 0))
+        h = bank.get('hash', 0)
+        out[28:32] = [(h >> shift) & 255 for shift in (0, 8, 16, 24)]
+        if extended:
+            hz = round(song.get('tickRate', 59.7275) * 1000)
+            out[32:36] = [(hz >> shift) & 255 for shift in (0, 8, 16, 24)]
+            w16(36, round(song.get('mixGain', 1) * 256))
     orders, sfx = song['orders'], song.get('sfx', [])
     if v2:
         out[7] = nv
@@ -229,11 +257,12 @@ def encode_song(song, names=False):
             flags = (1 if ins.get('ring') else 0) | (2 if ins.get('sync') else 0) | (4 if ins.get('filter') else 0)
             if ins.get('table', -1) >= 0:
                 table_refs.append((here() + 7, ins['table']))
+            gain = round(ins.get('mixGain', 0) * 256) if v3 else 0
             out += [OSC[osc], duty & 255, ((ins.get('vibSpeed', 0) & 15) << 4) | (ins.get('vibDepth', 0) & 15),
                     ins.get('vibDelay', 0) & 255, env_byte(ins['volume'], ins['envDir'], ins['envPace']),
                     ins.get('sweep', 0) & 255 if osc == 'pulse' else 0, ins.get('length', 0) & 255, 0, 0,
                     ins.get('tableSpeed', 0) & 255, smp + 1 if osc == 'sample' and smp is not None else 0,
-                    ins.get('pwm', 0) & 255, flags, 0, 0, 0]
+                    ins.get('pwm', 0) & 255, flags, ins.get('release', 0) & 255 if v3 else 0, gain & 255, gain >> 8]
             continue
         env = ins['volume'] & 3 if kind == 'wave' else env_byte(ins['volume'], ins['envDir'], ins['envPace'])
         duty = (8 if ins['duty'] else 0) if kind == 'noise' else ins['duty']

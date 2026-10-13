@@ -25,11 +25,19 @@ void chip_init(Chip *c, uint32_t sample_rate)
 
 int chip_post(Chip *c, uint8_t op, uint8_t a, uint8_t b, const uint8_t *blob)
 {
+    return chip_post_bank(c, op, a, b, blob, NULL);
+}
+
+int chip_post_bank(Chip *c, uint8_t op, uint8_t a, uint8_t b,
+                   const uint8_t *blob, const uint8_t *samples)
+{
     uint32_t h = c->head;
     ChipCmd *q;
+    if ((op == CHIP_PLAY || op == CHIP_SFX_BANK) && !gbm_sample_bank_match(blob, samples)) return 0;
     if (h - c->tail >= CHIP_QUEUE) return 0;
     q = &c->queue[h % CHIP_QUEUE];
     q->op = op; q->a = a; q->b = b; q->blob = blob;
+    q->samples = samples;
     BARRIER();
     c->head = h + 1;
     return 1;
@@ -39,10 +47,14 @@ static void run(Chip *c, const ChipCmd *q)
 {
     Gbm *g = &c->gbm;
     switch (q->op) {
-    case CHIP_PLAY: gbm_play(g, q->blob); if (q->a || q->b) gbm_seek(g, q->a, q->b); break;
+    case CHIP_PLAY:
+        gbm_play_bank(g, q->blob, q->samples);
+        if (q->a || q->b) gbm_seek(g, q->a, q->b);
+        if (q->blob[2] == 3 && (q->blob[27] & 128)) c->tick_cd = 0;
+        break;
     case CHIP_STOP: gbm_stop(g); break;
     case CHIP_PAUSE: gbm_pause(g, q->a); break;
-    case CHIP_SFX_BANK: gbm_sfx_bank(g, q->blob); break;
+    case CHIP_SFX_BANK: gbm_sfx_bank_samples(g, q->blob, q->samples); break;
     case CHIP_SFX: gbm_sfx(g, q->a); break;
     case CHIP_SFX_STOP: gbm_sfx_stop(g); break;
     case CHIP_DUCK: gbm_duck(g, q->a, q->b); break;
@@ -89,7 +101,7 @@ int chip_render(Chip *c, int16_t *left, int16_t *right, int n)
         while (c->tick_cd <= 0) {
             gbm_tick(g);
             c->ticks++;
-            c->tick_cd += GBM_FRAME_CYCLES;
+            c->tick_cd += (int32_t)g->frame_cycles;
             /* a drum sample started: its first block played inside the tick */
             if (g->timer_restart) { g->timer_restart = 0; c->timer_cd = GBM_TIMER_CYCLES; }
         }

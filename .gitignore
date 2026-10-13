@@ -1,4 +1,6 @@
-*.pdx/
+# Playdate packages and the archives used by browser demos.
+*.pdx
+*.pdx.zip
 # tools/build_demo.py stages the root modules, the demo .lua.in sources, the
 # music and the built C extension into demo/Source to compile, then removes
 # them. Ignored so an interrupted build cannot commit a stale duplicate.

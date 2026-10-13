@@ -25,6 +25,8 @@ local pd = rawget(_G, "playdate")
 Chiptune.available = false
 Chiptune._ready    = false
 Chiptune._songs    = {}      -- name -> native id
+Chiptune._banks    = {}      -- alias -> native sample-bank id
+Chiptune._bankPaths = {}     -- path -> id, shared across load() calls
 Chiptune._sfx      = {}      -- name -> index in the SFX bank
 Chiptune._current  = nil
 Chiptune._sync     = 0
@@ -103,7 +105,24 @@ local function readFile(path)
     return data
 end
 
+local function loadSong(def)
+    local path = type(def) == "table" and def.path or def
+    if type(path) ~= "string" then return nil, "chiptune: expected a song path" end
+    local bank
+    if type(def) == "table" and def.bank then
+        bank = Chiptune._banks[def.bank]
+        if not bank then return nil, "chiptune: no sample bank " .. tostring(def.bank) end
+    end
+    local data, err = readFile(path)
+    if not data then return nil, err end
+    local id, why = native.load(data, bank)
+    if not id then return nil, "chiptune: " .. path .. ": " .. tostring(why) end
+    return id, data
+end
+
 --- spec = { songs = { title = "music/title.gbm", battle = "music/battle.gbm" },
+---          banks = { rock = "music/rock.gbank" },
+---          -- a PCM song: title = { path = "music/title.gbm", bank = "rock" }
 ---          sfx = "music/sfx.gbm",            -- an SFX bank (names inside)
 ---          duck = { amount = 6, speed = 2 },  -- music dips while an effect plays
 ---          volume = 0.8 }
@@ -113,18 +132,27 @@ function Chiptune.load(spec)
     Chiptune.available = native ~= nil
     if not (pd and native) then return false, "chiptune: the C extension is not built in" end
     spec = spec or {}
-    for name, path in pairs(spec.songs or {}) do
-        local data, err = readFile(path)
-        if not data then return false, err end
-        local id, why = native.load(data)
-        if not id then return false, "chiptune: " .. path .. ": " .. tostring(why) end
+    for name, path in pairs(spec.banks or {}) do
+        if not native.samplebank then return false, "chiptune: rebuild the C extension for sample banks" end
+        local id = Chiptune._bankPaths[path]
+        if not id then
+            local data, err = readFile(path)
+            if not data then return false, err end
+            local why
+            id, why = native.samplebank(data)
+            if not id then return false, "chiptune: " .. path .. ": " .. tostring(why) end
+            Chiptune._bankPaths[path] = id
+        end
+        Chiptune._banks[name] = id
+    end
+    for name, def in pairs(spec.songs or {}) do
+        local id, err = loadSong(def)
+        if not id then return false, err end
         Chiptune._songs[name] = id
     end
     if spec.sfx then
-        local data, err = readFile(spec.sfx)
-        if not data then return false, err end
-        local id, why = native.load(data)
-        if not id then return false, "chiptune: " .. spec.sfx .. ": " .. tostring(why) end
+        local id, data = loadSong(spec.sfx)
+        if not id then return false, data end
         native.sfxbank(id)
         for i, n in ipairs(Chiptune.parseNames(data)) do Chiptune._sfx[n] = i - 1 end
     end
