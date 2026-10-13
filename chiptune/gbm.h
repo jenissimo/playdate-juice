@@ -17,10 +17,16 @@
    switching it frame by frame, as SID drums do), continuous pulse width and
    PWM, triangle and saw, ring modulation, hard sync and a resonant filter;
    it plays on vox. Everything else -- rows, commands, tables, SFX, ducking
-   -- is the same machinery. Format 3 adds studio PCM8 instruments: a shared
+   -- is the same machinery. Format 4 adds studio PCM8 instruments: a shared
    external bank, each sample's rate and root, interpolated sustain loops,
    and semitone-based pitch that is not constrained by DMG periods. It uses
    vox's mixer and can combine samples with the format-2 oscillators.
+
+   Format 3 is format 2 with FastTracker 2's sampler added: 8-bit samples
+   of any length at their own rates (vox's OSC_PCM), and FT2's commands for
+   them -- sample offset, volume and volume slide, pan position, backwards,
+   and a tempo in BPM, which gives the music a tick clock of its own
+   instead of the Game Boy's 59.73 Hz frame. The SFX keep the frame.
 
    Not thread-safe: one thread owns a Gbm. chip.h wraps it for an audio
    callback. */
@@ -49,11 +55,17 @@ typedef struct {
     /* format 2 */
     uint8_t osc, xflags, sample;
     int8_t pwm;
+    /* format 3: the channel volume (0-64) and its slide, the pan position,
+       and what the next note takes from its row: an offset (x 256 frames),
+       backwards, a volume (`pend` says which the row set) */
+    uint8_t level, vslide, fpan;
+    uint8_t offset, nrev, pend;
+    uint8_t start, rev;                 /* the sounding note's offset and direction */
 } GbmChan;
 
 typedef struct {
     const uint8_t *base, *ins, *tbl, *wave;
-    const uint8_t *samples;          /* format 3: checked external PCM8 bank */
+    const uint8_t *samples;          /* format 4: checked external PCM8 bank */
     uint8_t version, rec, trow;        /* format; instrument and table-row sizes */
 } GbmBank;
 
@@ -69,7 +81,6 @@ typedef struct Gbm {
     const uint8_t *patdir[GBM_VOICES];
     const uint8_t *sfxdir;
     uint8_t nv, v2;                     /* music channels; playing on vox */
-    uint32_t frame_cycles;             /* v3 may specify a straight musical clock */
     const uint8_t *orders, *groove, *groovetab;
     uint8_t rows, order_count, loop_order, tick_n, groove_pos;
     uint8_t jump, brk, paused, muted;
@@ -83,6 +94,14 @@ typedef struct Gbm {
     uint8_t porder, prow;
     uint8_t nr51;
     uint8_t active;
+    /* Format 3's tempo: the music ticks every tick_cycles CPU cycles, on a
+       clock of its own (gbm_tick_music); 0 ticks it with the frame, as
+       formats 1 and 2 always do. bpm is the song's own, for a restart. */
+    uint32_t tick_cycles;
+    uint8_t bpm;
+    /* Format 3's amplification (FT2's): the music's voices at mix / 16,
+       its effects as they are. */
+    uint8_t mix;
     /* A drum sample borrowing CH3, fed 16 bytes at a time by gbm_pcm_isr at
        256 Hz. The host owns that timer: it calls gbm_pcm_isr while
        timer_irq is set, restarting its count when timer_restart is. */
@@ -100,6 +119,10 @@ void gbm_stop(Gbm *g);
 void gbm_pause(Gbm *g, uint8_t paused);
 /* Once per DMG frame: 4194304 / 70224 = 59.73 times a second. */
 void gbm_tick(Gbm *g);
+/* The music's own tick, every g->tick_cycles cycles while that is not 0
+   (a format-3 song with a tempo): gbm_tick then runs only the SFX, the
+   ducking and the drum-sample timer. */
+void gbm_tick_music(Gbm *g);
 
 void gbm_sfx_bank(Gbm *g, const uint8_t *bank);
 void gbm_sfx_bank_samples(Gbm *g, const uint8_t *bank, const uint8_t *samples);

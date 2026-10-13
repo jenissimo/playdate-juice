@@ -43,11 +43,11 @@ class BankTests(unittest.TestCase):
             blob = encode_bank(samples)
             self.assertEqual(struct.unpack_from('<I', blob, 8)[0], bank_hash(blob))
             self.assertEqual(struct.unpack_from('<I', blob, 24)[0], 440000)
-            s = Song('import', version=3, voices=1)
+            s = Song('import', version=4, voices=1)
             self.assertEqual(studio_bank(s, directory, rate=11025), blob)
             s.bar(['A4@tone . . -'])
             song = encode_song(s.project())
-            self.assertEqual(song[2], 3)
+            self.assertEqual(song[2], 4)
             self.assertEqual(song[28:32], blob[8:12])
             with self.assertRaisesRegex(ValueError, 'no studio sample'):
                 import_bank(directory, only=['missing'])
@@ -63,8 +63,20 @@ class BankTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_bank([dict(pcm8=b'\x00', rate=16384, root=69, loop=[0, 2])])
         with self.assertRaisesRegex(ValueError, 'version'):
-            s = Song('invalid', version=4, voices=1)
+            s = Song('invalid', version=5, voices=1)
             s.bar(['C4'])
+            encode_song(s.project())
+
+    def test_sampler_layout_is_explicit(self):
+        s = Song('old development layout', version=3, voices=1)
+        s.s['sampleBank'] = dict(count=1, hash=1)
+        s.bar(['C4'])
+        with self.assertRaisesRegex(ValueError, 'external sample banks need format 4'):
+            encode_song(s.project())
+        s = Song('wrong sampler oscillator', version=4, voices=1)
+        s.voice('pcm', 'wrong')
+        s.bar(['C4@wrong'])
+        with self.assertRaisesRegex(ValueError, 'bank instruments use the sample oscillator'):
             encode_song(s.project())
 
 

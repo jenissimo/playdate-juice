@@ -48,6 +48,9 @@ local SONGS = {
     { id = "studio_menu",  title = "Studio Menu",  style = "Original rock arrangement - 140 BPM", tag = "PCM A/B", bank = "studio", reference = true },
     { id = "studio_play",  title = "Studio Play",  style = "Original table theme - 132 BPM", tag = "PCM A/B", bank = "studio", reference = true },
     { id = "studio_multi", title = "Studio Multi", style = "Original multiball theme - 166 BPM", tag = "PCM A/B", bank = "studio", reference = true },
+    { id = "jungle_ride",   title = "Jungle Ride",   style = "Jungle - chopped break, reese, pads", tag = "FT2 7ch" },
+    { id = "jungle_race",   title = "Jungle Race",   style = "Jungle - hard break, hoover, rolls", tag = "FT2 7ch" },
+    { id = "jungle_menu",   title = "Jungle Menu",   style = "Jungle - calm, flute, rolling bass", tag = "FT2 6ch" },
 }
 local songPaths = {}
 for _, s in ipairs(SONGS) do
@@ -231,7 +234,7 @@ local EXHIBITS = {
     { id = "backgrounds", name = "Backgrounds",       blurb = "17 looping procedural backgrounds",   fx = "Dissolve" },
     { id = "tween",       name = "Tween",             blurb = "31 easings, springs, sequences",      fx = "Slide" },
     { id = "impact",      name = "Shake & Particles", blurb = "Trauma shake, pooled 1-bit particles", fx = "Shatter" },
-    { id = "music",       name = "Chiptune: Music",   blurb = "15 songs: Game Boy, SID and PCM band", fx = "Scanline" },
+    { id = "music",       name = "Chiptune: Music",   blurb = "18 songs: Game Boy, SID and PCM band", fx = "Scanline" },
     { id = "sfx",         name = "Chiptune: SFX",     blurb = "84 effects that duck the music",      fx = "Pixel Shift" },
     { id = "jukebox",     name = "Jukebox",           blurb = "Three sounds: live tracker or stream", fx = "Fade" },
 }

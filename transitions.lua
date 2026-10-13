@@ -78,6 +78,7 @@ local unpack <const> = table.unpack
 -- is the half the host tests cover.
 
 Transitions.active = false
+Transitions.capturing = false    -- true while a scene is drawn into the offscreen capture
 Transitions._ready = false      -- true once the buffers exist; see load()
 
 Transitions.names = {
@@ -969,9 +970,11 @@ function Transitions.draw(updateFn, drawFn)
             return
         end
         if not incoming_captured then
+            Transitions.capturing = true           -- drawing into `buf`, not the display
             gfx.pushContext(buf)
             updateFn()
             gfx.popContext()
+            Transitions.capturing = false
             incoming_captured = true
         end
         gfx.setColor(gfx.kColorBlack)
@@ -992,9 +995,11 @@ function Transitions.draw(updateFn, drawFn)
     end
 
     if not incoming_captured then
+        Transitions.capturing = true
         gfx.pushContext(buf)
         drawFn()
         gfx.popContext()
+        Transitions.capturing = false
         incoming_captured = true
     end
 
