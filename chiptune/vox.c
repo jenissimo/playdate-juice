@@ -9,7 +9,10 @@ void vox_init(Vox *x, uint32_t rate)
     memset(x, 0, sizeof *x);
     x->rate = rate;
     x->master = 1.0f;
-    for (i = 0; i < VOX_VOICES; i++) { x->v[i].pan = 3; x->v[i].width = 0.5f; x->v[i].lfsr = 0x7FFF; }
+    x->limiter_gain = 1.0f;
+    x->comp_power = 0.0f;
+    x->hp_coeff = 1.0f - 251.327412f / (float)rate;
+    for (i = 0; i < VOX_VOICES; i++) { x->v[i].pan = 3; x->v[i].width = 0.5f; x->v[i].lfsr = 0x7FFF; x->v[i].mix_gain = 1.0f; }
     vox_voices(x, 4);
     vox_filter(x, 255, 0, VOX_LP);
 }
@@ -48,6 +51,15 @@ static float noise_rate(uint8_t nr43)
     return 524288.0f / (r ? (float)r : 0.5f) / (float)(2 << s);
 }
 
+static float sample_hz(uint16_t pitch)
+{
+    static const float C1[12] = {32.703196f,34.647829f,36.708096f,38.890873f,
+        41.203445f,43.653529f,46.249303f,48.999429f,51.913087f,55.0f,58.27047f,61.735413f};
+    unsigned n = pitch >> 8;
+    return C1[n % 12] * (float)(1u << (n / 12)) *
+           (1.0f + 0.059463094f * (float)(pitch & 255) * (1.0f / 256.0f));
+}
+
 static void set_pitch(Vox *x, VoxVoice *v, uint16_t pitch)
 {
     if (v->osc == OSC_NOISE) {
@@ -55,7 +67,8 @@ static void set_pitch(Vox *x, VoxVoice *v, uint16_t pitch)
         v->inc = noise_rate((uint8_t)pitch) / (float)x->rate;
     } else if (v->osc == OSC_SAMPLE) {
         /* A sample plays at 8192 Hz at C5 (period 1798) and follows the note. */
-        v->inc = freq_of(OSC_PULSE, pitch) / 523.25f * 8192.0f / (float)x->rate;
+        v->inc = v->smp_bits == 8 ? sample_hz(pitch) * v->smp_scale :
+                 freq_of(OSC_PULSE, pitch) / 523.25f * 8192.0f / (float)x->rate;
     } else {
         v->inc = freq_of(v->osc, pitch) / (float)x->rate;
     }
@@ -82,6 +95,7 @@ void vox_trigger(Vox *x, int i, uint8_t osc, uint16_t pitch, uint8_t env)
        times a second in a 9x2 tremolo. The wave's position does restart. */
     if (v->osc == OSC_WAVE) v->phase = 0.0f;
     v->smp_pos = 0.0f;
+    v->releasing = 0; v->release_gain = 1.0f;
     v->lfsr = 0x7FFF;
     v->sweep_timer = (v->sweep >> 4) & 7;
     v->sweep_count = (int32_t)(x->rate / 128);
@@ -106,12 +120,54 @@ void vox_width(Vox *x, int i, uint8_t w)
     x->v[i].width = f < 0.01f ? 0.01f : f > 0.99f ? 0.99f : f;
 }
 void vox_wave(Vox *x, int i, const uint8_t *wave) { x->v[i].wave = wave; }
-void vox_sample(Vox *x, int i, const uint8_t *d, uint32_t n) { x->v[i].smp = d; x->v[i].smp_len = n; x->v[i].smp_pos = 0; }
+void vox_sample(Vox *x, int i, const uint8_t *d, uint32_t n)
+{
+    VoxVoice *v = &x->v[i];
+    v->smp = d; v->smp_len = n; v->smp_pos = 0; v->smp_bits = 4;
+    v->smp_loop_start = v->smp_loop_end = 0;
+}
+void vox_sample8(Vox *x, int i, const uint8_t *d, uint32_t n,
+                 uint32_t rate, uint32_t root_millihz, uint32_t start, uint32_t end)
+{
+    VoxVoice *v = &x->v[i];
+    v->smp = d; v->smp_len = n; v->smp_pos = 0; v->smp_bits = 8;
+    v->smp_loop_start = start; v->smp_loop_end = end;
+    v->smp_scale = root_millihz ? (float)rate / ((float)root_millihz * 0.001f * (float)x->rate) : 0.0f;
+}
 void vox_sweep(Vox *x, int i, uint8_t nr10) { x->v[i].sweep = nr10; }
 void vox_flags(Vox *x, int i, uint8_t f) { x->v[i].flags = f; }
 void vox_pan(Vox *x, int i, uint8_t pan) { x->v[i].pan = pan & 3; }
 void vox_duck(Vox *x, int i, uint8_t steps) { x->v[i].duck = steps; }
-void vox_off(Vox *x, int i) { x->v[i].on = 0; }
+void vox_off(Vox *x, int i) { x->v[i].on = x->tail[i].on = 0; }
+void vox_articulation(Vox *x, int i, uint8_t release_ms, uint16_t gain_q8)
+{
+    x->v[i].release_ms = release_ms;
+    x->v[i].mix_gain = gain_q8 ? (float)gain_q8 * (1.0f / 256.0f) : 1.0f;
+}
+static void start_release(Vox *x, VoxVoice *v)
+{
+    if (!v->on) return;
+    if (v->smp_bits != 8 || v->osc != OSC_SAMPLE || !v->release_ms) { v->on = 0; return; }
+    if (!v->releasing) {
+        v->releasing = 1; v->release_gain = 1.0f;
+        v->release_step = 1000.0f / ((float)x->rate * (float)v->release_ms);
+    }
+}
+void vox_release(Vox *x, int i) { start_release(x, &x->v[i]); }
+void vox_note_tail(Vox *x, int i)
+{
+    VoxVoice *v = &x->v[i];
+    if (v->on && v->osc == OSC_SAMPLE && v->smp_bits == 8 && v->release_ms) {
+        x->tail[i] = *v; start_release(x, &x->tail[i]);
+    }
+}
+void vox_output(Vox *x, uint16_t gain_q8)
+{
+    x->output_gain = (float)gain_q8 * (1.0f / 256.0f);
+    x->limiter_gain = 1.0f;
+    x->comp_power = 0.0f;
+    x->hp_in[0] = x->hp_in[1] = x->hp_out[0] = x->hp_out[1] = 0.0f;
+}
 
 void vox_filter(Vox *x, uint8_t cutoff, uint8_t resonance, uint8_t mode)
 {
@@ -148,7 +204,7 @@ void vox_frame(Vox *x)
 int vox_active(const Vox *x)
 {
     int i;
-    for (i = 0; i < VOX_VOICES; i++) if (x->v[i].on) return 1;
+    for (i = 0; i < VOX_VOICES; i++) if (x->v[i].on || x->tail[i].on) return 1;
     return 0;
 }
 
@@ -205,6 +261,70 @@ static void housekeeping(Vox *x, int m)
    voices are rendered in order. */
 #define BLOCK 32
 
+static void sample8_block(VoxVoice *v, float amp, float *dl, float *dr, int m)
+{
+    float pos = v->smp_pos;
+    const uint8_t *d = v->smp;
+    const float end = (float)v->smp_len;
+    const uint32_t a = v->smp_loop_start, b = v->smp_loop_end;
+    const float span = (float)(b - a), inv_span = b ? 1.0f / span : 0.0f;
+    int k;
+    amp *= 1.0f / 128.0f;
+    for (k = 0; k < m && v->on; k++) {
+        float o = 0.0f;
+        if (d && pos < end) {
+            uint32_t st = (uint32_t)pos, next = st + 1;
+            float frac = pos - (float)st, p, q;
+            if (b && next >= b) next = a;
+            p = (float)(d[st] < 128 ? d[st] : (int)d[st] - 256);
+            q = next < v->smp_len ? (float)(d[next] < 128 ? d[next] : (int)d[next] - 256) : 0.0f;
+            o = (p + (q - p) * frac) * amp;
+            pos += v->inc;
+            if (b && pos >= (float)b) {
+                pos -= (float)((uint32_t)((pos - (float)a) * inv_span)) * span;
+                if (pos >= (float)b) pos -= span;
+                if (pos < (float)a) pos += span;
+            }
+        }
+        if (v->releasing) {
+            o *= v->release_gain;
+            v->release_gain -= v->release_step;
+            if (v->release_gain <= 0.0f) v->on = 0;
+        }
+        dl[k] += o; dr[k] += o;
+        if (!d || (!b && pos >= end)) v->on = 0;
+    }
+    v->smp_pos = pos;
+}
+
+static float output_clip(float s)
+{
+    const float knee = 23197.0f, span = 9570.0f;
+    if (s > knee) {
+        float q = (s - knee) * (1.0f / 19140.0f);
+        if (q > 1.0f) q = 1.0f;
+        return knee + 2.0f * span * q * (1.0f - 0.5f * q);
+    }
+    if (s < -knee) {
+        float q = (-s - knee) * (1.0f / 19140.0f);
+        if (q > 1.0f) q = 1.0f;
+        return -knee - 2.0f * span * q * (1.0f - 0.5f * q);
+    }
+    return s;
+}
+
+static float positive_sqrt(float f)
+{
+    uint32_t bits;
+    float y;
+    memcpy(&bits, &f, sizeof bits);
+    bits = 0x5F3759DFu - (bits >> 1);
+    memcpy(&y, &bits, sizeof y);
+    y *= 1.5f - 0.5f * f * y * y;
+    y *= 1.5f - 0.5f * f * y * y;
+    return f * y;
+}
+
 uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
 {
     float bl[BLOCK], br[BLOCK], bf[BLOCK], scratch[BLOCK];
@@ -229,7 +349,7 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
             int vol;
             if (!v->on) { prev_on = 0; continue; }
             vol = v->vol - v->duck;
-            amp = (float)(vol > 0 ? vol : 0) * scale;
+            amp = (float)(vol > 0 ? vol : 0) * scale * v->mix_gain;
             /* Most notes end by fading to 0 and are never switched off: skip
                a silent voice that will stay silent -- unless the next voice
                syncs or rings off it, since a silent master is a SID
@@ -327,6 +447,11 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
                 float pos = v->smp_pos;
                 const uint8_t *d = v->smp;
                 const float end = (float)v->smp_len;
+                if (v->smp_bits == 8) {
+                    sample8_block(v, amp, dl, dr, m);
+                    for (k = 0; k < m; k++) { cur_sq[k] = 1.0f; cur_wr[k] = 0; }
+                    break;
+                }
                 for (k = 0; k < m; k++) {
                     float o = 0.0f;
                     if (d && pos < end) {
@@ -350,6 +475,13 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
             { uint8_t *t = prev_wr; prev_wr = cur_wr; cur_wr = t; }
         }
 
+        for (i = 0; i < VOX_VOICES; i++) if (x->tail[i].on) {
+            VoxVoice *v = &x->tail[i];
+            float amp = (float)(v->vol > v->duck ? v->vol - v->duck : 0) * scale * v->mix_gain;
+            if (v->flags & VOX_FILTER) { sample8_block(v, amp, bf, scratch, m); routed = 1; }
+            else sample8_block(v, amp, (v->pan & 2) ? bl : scratch, (v->pan & 1) ? br : scratch, m);
+        }
+
         /* The filter runs while anything goes through it, and on after, until
            its ringing has died away. */
         if (x->mode && (routed || x->band > 1.0f || x->band < -1.0f || x->low > 1.0f || x->low < -1.0f)) {
@@ -371,6 +503,41 @@ uint32_t vox_render(Vox *x, int16_t *left, int16_t *right, int n)
             x->low = low; x->band = band;
         }
 
+        if (x->output_gain > 0.0f) {
+            float peak = 0.0f, wanted, power = 0.0f, cg = 1.0f, follow;
+            for (k = 0; k < m; k++) {
+                float l = bl[k], r = br[k], h;
+                h = l - x->hp_in[0] + x->hp_coeff * x->hp_out[0];
+                x->hp_in[0] = l; x->hp_out[0] = h; bl[k] = h * x->output_gain;
+                h = r - x->hp_in[1] + x->hp_coeff * x->hp_out[1];
+                x->hp_in[1] = r; x->hp_out[1] = h; br[k] = h * x->output_gain;
+                power += bl[k] * bl[k] + br[k] * br[k];
+            }
+            power *= 0.5f / ((float)m * 32767.0f * 32767.0f);
+            follow = (float)m / ((float)x->rate * (power > x->comp_power ? 0.012f : 0.09f));
+            if (follow > 1.0f) follow = 1.0f;
+            x->comp_power += (power - x->comp_power) * follow;
+            /* 2:1 glue above -16 dBFS RMS. Two square roots run once per
+               block; the per-sample output stays multiply/add only. */
+            if (x->comp_power > 0.0251189f) cg = positive_sqrt(positive_sqrt(0.0251189f / x->comp_power));
+            for (k = 0; k < m; k++) {
+                float l, r;
+                bl[k] = output_clip(bl[k] * cg); br[k] = output_clip(br[k] * cg);
+                l = bl[k] < 0.0f ? -bl[k] : bl[k]; r = br[k] < 0.0f ? -br[k] : br[k];
+                if (l > peak) peak = l;
+                if (r > peak) peak = r;
+            }
+            wanted = peak > 29203.0f ? 29203.0f / peak : 1.0f;
+            if (wanted < x->limiter_gain) x->limiter_gain = wanted;
+            else x->limiter_gain += (wanted - x->limiter_gain) * (float)m / ((float)x->rate * 0.08f);
+            for (k = 0; k < m; k++) {
+                if (left) left[k] = (int16_t)(bl[k] * x->limiter_gain);
+                if (right) right[k] = (int16_t)(br[k] * x->limiter_gain);
+            }
+            if (left) left += m;
+            if (right) right += m;
+            n -= m; housekeeping(x, m); continue;
+        }
         for (k = 0; k < m; k++) {
             float sl = bl[k], sr = br[k];
             /* A soft knee: above 3/4 of full scale the excess is halved, so

@@ -391,6 +391,27 @@ def sample_voice(song, sample, name, volume=14, **o):
     return song.voice('sample', name, volume=volume, envPace=o.pop('envPace', 0), sample=names.index(sample['name']), **o)
 
 
+def studio_bank(song, directory, rate=16384, only=None, out=None):
+    """Import studio's bank as named format-3 instruments; return .gbank bytes.
+
+    Use the same selection/rate for songs sharing a bank. root in bank.json
+    is MIDI (C1=24), whereas GBM's pattern numbers start at C1=0.
+    """
+    from gbm_bank import import_bank, encode_bank
+    import struct
+    if song.s['version'] != 3 or song.s.get('sampleBank'):
+        raise ValueError('studio_bank needs a format-3 song without a bank')
+    samples = import_bank(directory, rate=rate, only=only)
+    blob = encode_bank(samples)
+    song.s['sampleBank'] = dict(count=len(samples), hash=struct.unpack_from('<I', blob, 8)[0])
+    for i, sample in enumerate(samples):
+        song.voice('sample', sample['name'], sample=i, volume=12, envPace=0)
+    if out:
+        with open(out, 'wb') as f:
+            f.write(blob)
+    return blob
+
+
 # ─── SID-style drums (format 2): one voice, the oscillator switched by table ──
 
 def sid_kick(song, name='skick', drop=0xB0, frames=6, volume=15):

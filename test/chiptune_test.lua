@@ -113,4 +113,26 @@ local o, r = C.position()
 A.eq(o, 3, "position reads the order")
 A.eq(r, 7, "and the row")
 
+-- Shared PCM banks: two songs and repeated load() calls reuse one upload.
+local bankLoads, songBanks = 0, {}
+files["m/rock.gbank"] = "GBK\1" .. string.rep("\0", 64)
+_G.chiptune_native.samplebank = function(bytes) bankLoads = bankLoads + 1; return 17 end
+_G.chiptune_native.load = function(bytes, bank)
+    nextId = nextId + 1; songBanks[#songBanks + 1] = bank; return nextId
+end
+ok, err = C.load({ banks = { rock = "m/rock.gbank" }, songs = {
+    rock = { path = "m/title.gbm", bank = "rock" },
+    rock2 = { path = "m/title.gbm", bank = "rock" },
+} })
+A.truthy(ok, "PCM songs load: " .. tostring(err))
+A.eq(bankLoads, 1, "one upload for two songs")
+A.eq(songBanks[1], 17, "song carries its bank id into native.load")
+A.eq(songBanks[2], 17, "the second song shares it")
+C.load({ banks = { another = "m/rock.gbank" } })
+A.eq(bankLoads, 1, "a later alias reuses the uploaded bank")
+A.falsy(C.load({ songs = { bad = { path = "m/title.gbm", bank = "missing" } } }), "an undefined bank fails at load")
+A.falsy(C.load({ banks = { bad = "m/missing.gbank" } }), "a missing bank file fails at load")
+_G.chiptune_native.samplebank = nil
+A.falsy(C.load({ banks = { rock = "m/rock.gbank" } }), "old extensions report missing bank support")
+
 _G.playdate, _G.chiptune_native = nil, nil

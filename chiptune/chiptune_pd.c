@@ -6,6 +6,7 @@
 #include <string.h>
 #include "pd_api.h"
 #include "chip.h"
+#include "bank_codec.h"
 #include "chiptune_pd.h"
 
 #define MAX_BLOBS 64
@@ -14,7 +15,11 @@ static PlaydateAPI *pd;
 static Chip *chip;
 static SoundSource *source;
 static uint8_t *blobs[MAX_BLOBS];
+static const uint8_t *blob_samples[MAX_BLOBS];
 static int nblobs;
+static uint8_t *sample_banks[MAX_BLOBS];
+static uint32_t sample_sizes[MAX_BLOBS];
+static int nsample_banks;
 
 static int render(void *ctx, int16_t *left, int16_t *right, int len)
 {
@@ -52,7 +57,7 @@ static int post(uint8_t op, uint8_t a, uint8_t b, const uint8_t *blob)
     return 1;
 }
 
-/* load(bytes) -> id | nil, error. The blob is copied and kept: songs are
+/* load(bytes, sample_bank_id?) -> id | nil, error. The blob is copied and kept: songs are
    small (a few KB) and the audio thread may be reading one at any moment,
    so nothing is ever freed from under it. */
 static int l_load(lua_State *L)
@@ -60,36 +65,90 @@ static int l_load(lua_State *L)
     size_t len = 0;
     const char *bytes = pd->lua->getArgBytes(1, &len);
     uint8_t *copy;
+    const uint8_t *samples = NULL;
     int err;
     (void)L;
     if (!bytes) { pd->lua->pushNil(); pd->lua->pushString("expected the blob's bytes"); return 2; }
     if ((err = gbm_check((const uint8_t *)bytes, (uint32_t)len)) != 0) {
         pd->lua->pushNil(); pd->lua->pushString("not a GBM blob (or damaged)"); return 2;
     }
+    if (pd->lua->getArgCount() >= 2 && pd->lua->getArgType(2, NULL) != kTypeNil) {
+        int id = pd->lua->getArgInt(2);
+        if (id < 1 || id > nsample_banks) {
+            pd->lua->pushNil(); pd->lua->pushString("unknown sample bank"); return 2;
+        }
+        samples = sample_banks[id - 1];
+    }
+    if (!gbm_sample_bank_match((const uint8_t *)bytes, samples)) {
+        pd->lua->pushNil(); pd->lua->pushString("missing or mismatched sample bank"); return 2;
+    }
     if (nblobs >= MAX_BLOBS) { pd->lua->pushNil(); pd->lua->pushString("too many songs loaded"); return 2; }
     copy = pd->system->realloc(NULL, len);
     if (!copy) { pd->lua->pushNil(); pd->lua->pushString("out of memory"); return 2; }
     memcpy(copy, bytes, len);
+    blob_samples[nblobs] = samples;
     blobs[nblobs++] = copy;
     ensure();
     pd->lua->pushInt(nblobs);
     return 1;
 }
 
+/* Banks are immutable and retained for the game session. Deduplicate before
+   copying: several songs can use the same large bank without multiplying RAM. */
+static int l_samplebank(lua_State *L)
+{
+    size_t len = 0;
+    const uint8_t *bytes = (const uint8_t *)pd->lua->getArgBytes(1, &len);
+    uint8_t *copy;
+    void *workspace = NULL;
+    uint32_t raw_size;
+    int i;
+    (void)L;
+    if (!bytes || len > UINT32_MAX || !(raw_size = bank_raw_size(bytes, (uint32_t)len))) {
+        pd->lua->pushNil(); pd->lua->pushString("not a sample bank (or damaged)"); return 2;
+    }
+    if (nsample_banks >= MAX_BLOBS) {
+        pd->lua->pushNil(); pd->lua->pushString("too many sample banks loaded"); return 2;
+    }
+    copy = pd->system->realloc(NULL, raw_size);
+    if (!copy) { pd->lua->pushNil(); pd->lua->pushString("out of memory"); return 2; }
+    if (bytes[2] == 'Z') workspace = pd->system->realloc(NULL, bank_workspace_size());
+    if ((bytes[2] == 'Z' && !workspace) || bank_unpack(bytes, (uint32_t)len, copy, raw_size, workspace) || gbm_sample_bank_check(copy, raw_size)) {
+        if (workspace) pd->system->realloc(workspace, 0);
+        pd->system->realloc(copy, 0);
+        pd->lua->pushNil(); pd->lua->pushString("not a sample bank (or damaged)"); return 2;
+    }
+    if (workspace) pd->system->realloc(workspace, 0);
+    for (i = 0; i < nsample_banks; i++) {
+        if (sample_sizes[i] == raw_size && !memcmp(sample_banks[i], copy, raw_size)) {
+            pd->system->realloc(copy, 0); pd->lua->pushInt(i + 1); return 1;
+        }
+    }
+    sample_sizes[nsample_banks] = raw_size;
+    sample_banks[nsample_banks++] = copy;
+    pd->lua->pushInt(nsample_banks);
+    return 1;
+}
+
+static int post_song(uint8_t op, uint8_t a, uint8_t b)
+{
+    const uint8_t *blob = blob_arg(1);
+    int id = pd->lua->getArgInt(1);
+    if (!blob || !ensure()) { pd->lua->pushBool(0); return 1; }
+    pd->lua->pushBool(chip_post_bank(chip, op, a, b, blob, blob_samples[id - 1]));
+    return 1;
+}
+
 static int l_play(lua_State *L)
 {
-    const uint8_t *b = blob_arg(1);
     (void)L;
-    if (!b) { pd->lua->pushBool(0); return 1; }
-    return post(CHIP_PLAY, (uint8_t)arg_u8(2, 0), (uint8_t)arg_u8(3, 0), b);
+    return post_song(CHIP_PLAY, (uint8_t)arg_u8(2, 0), (uint8_t)arg_u8(3, 0));
 }
 
 static int l_sfxbank(lua_State *L)
 {
-    const uint8_t *b = blob_arg(1);
     (void)L;
-    if (!b) { pd->lua->pushBool(0); return 1; }
-    return post(CHIP_SFX_BANK, 0, 0, b);
+    return post_song(CHIP_SFX_BANK, 0, 0);
 }
 
 static int l_stop(lua_State *L) { (void)L; return post(CHIP_STOP, 0, 0, NULL); }
@@ -155,6 +214,7 @@ static int l_levels(lua_State *L)
 }
 
 static const lua_reg REG[] = {
+    {"samplebank", l_samplebank},
     {"load", l_load}, {"play", l_play}, {"stop", l_stop}, {"pause", l_pause},
     {"sfxbank", l_sfxbank}, {"sfx", l_sfx}, {"sfxstop", l_sfxstop},
     {"duck", l_duck}, {"mute", l_mute}, {"hold", l_hold}, {"master", l_master},

@@ -97,8 +97,9 @@ Lua on this CPU. The rules above carry over:
 - The driver is a port held to the original's behaviour by recorded traces
   (`test/chiptune/golden.zip`). A change to `gbm.c` that alters any APU write
   fails that test; if the change is meant to, say so and re-record, don't
-  loosen the comparison. Format 2 has no original: `test/chiptune/v2_test.c`
-  holds it to what its features promise.
+  loosen the comparison. Formats 2 and 3 have no original:
+  `test/chiptune/v2_test.c` and `v3_test.c` hold them to their features,
+  including PCM8 roots, interpolation, loops and legacy SFX coexistence.
 - The render path runs on a Cortex-M7 in an interrupt: single-precision float
   only (`-Wdouble-promotion` is on for the device), no division or allocation
   per sample, and measure with `tools/chiptune.py render ... --bench` before

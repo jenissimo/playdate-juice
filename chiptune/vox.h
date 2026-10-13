@@ -46,14 +46,20 @@ typedef struct {
     /* noise */
     uint16_t lfsr;
     uint8_t short_mode;
-    /* sample: 4-bit, two per byte */
+    /* Legacy 4-bit PCM, or studio PCM8 with an exclusive sustain-loop end. */
     const uint8_t *smp;
     uint32_t smp_len;               /* in samples */
     float smp_pos;
+    uint8_t smp_bits;
+    uint32_t smp_loop_start, smp_loop_end;
+    float smp_scale;                /* source rate / root Hz / output rate */
+    float mix_gain, release_gain, release_step;
+    uint8_t release_ms, releasing;
 } VoxVoice;
 
 typedef struct {
     VoxVoice v[VOX_VOICES];
+    VoxVoice tail[VOX_VOICES];       /* bounded release overlap on retrigger */
     uint32_t rate;
     float master;                   /* NR50-like, 0..1 */
     float gain;                     /* per voice, by how many voices the song has */
@@ -62,6 +68,8 @@ typedef struct {
     float f, q;                     /* the filter's coefficients, from the above */
     float low, band;                /* its state */
     uint32_t frac;                  /* cycle remainder, as in gbapu */
+    float output_gain, limiter_gain, hp_coeff, comp_power;
+    float hp_in[2], hp_out[2];
 } Vox;
 
 void vox_init(Vox *x, uint32_t rate);
@@ -79,11 +87,20 @@ void vox_osc(Vox *x, int i, uint8_t osc);       /* no restart either */
 void vox_width(Vox *x, int i, uint8_t width);   /* 0-255 */
 void vox_wave(Vox *x, int i, const uint8_t *wave);
 void vox_sample(Vox *x, int i, const uint8_t *data, uint32_t samples);
+/* PCM8 pitch is unsigned 8.8 semitones from C1, independent of DMG periods.
+   Data and loop bounds must have been checked by the loader. No ownership
+   is transferred: the bank must outlive every voice reading it. */
+void vox_sample8(Vox *x, int i, const uint8_t *data, uint32_t samples,
+                 uint32_t rate, uint32_t root_millihz, uint32_t start, uint32_t end);
 void vox_sweep(Vox *x, int i, uint8_t nr10);
 void vox_flags(Vox *x, int i, uint8_t flags);
 void vox_pan(Vox *x, int i, uint8_t pan);
 void vox_duck(Vox *x, int i, uint8_t steps);
 void vox_off(Vox *x, int i);
+void vox_release(Vox *x, int i);
+void vox_note_tail(Vox *x, int i);
+void vox_articulation(Vox *x, int i, uint8_t release_ms, uint16_t gain_q8);
+void vox_output(Vox *x, uint16_t gain_q8); /* zero: original output path */
 void vox_filter(Vox *x, uint8_t cutoff, uint8_t resonance, uint8_t mode);
 void vox_cutoff_slide(Vox *x, int8_t per_tick);
 /* Called by the driver once a frame: filter sweeps. */

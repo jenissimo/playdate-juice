@@ -1,13 +1,13 @@
 # chiptune
 
-Game Boy music and sound effects for Playdate, from a real tracker driver --
-and an extended mode that goes past the Game Boy: up to 8 voices, SID-style.
+Three tracker sound families for Playdate: Game Boy, SID-style synthesis,
+and a studio PCM band in the style of 16-bit-era sample trackers.
 
 The engine is **GBM**, a tracker music/SFX driver written for the original Game
 Boy (instruments with LSDj-style tables, arpeggios, slides, vibrato, two SFX
 slots that borrow a channel from the music, ducking, drum samples). Here it is
 ported from SM83 assembly to portable C and runs inside a Playdate audio
-callback, on one of two synths:
+callback, with three formats on two synth backends:
 
 - **gbapu**, the DMG's APU emulated register by register, for **format 1**:
   four Game Boy channels, exactly. `python tools/chiptune.py test` replays
@@ -21,19 +21,27 @@ callback, on one of two synths:
   modulation, ring modulation, hard sync, and one resonant multimode filter.
   Pitch and envelopes keep the Game Boy's semantics, so everything else --
   rows, commands, tables, SFX, ducking -- is the same driver.
+- **vox PCM**, for **format 3**: the studio's guitars, drums, pads and
+  supersaws as signed PCM8, with a source rate and root note per sample,
+  linear interpolation and sustain loops. A separate shared bank can exceed
+  64 KiB. Samples and vox's synthetic voices can play in the same song;
+  rows, mute, sync, hold, SFX and ducking still use the GBM driver. This is
+  Amiga/MOD-like sample playback, not YM2612/Genesis FM emulation.
 
-Songs are tiny: the demo songs are 0.2-3.4 KB each.
+Songs are tiny: the demo songs are 0.2-5.4 KB each. The three PCM examples share
+one 207,412-byte bank; their patterns are 960-1,086 bytes each.
 
 ```
 chiptune/
-  gbm.c gbm.h         the driver: rows, notes, commands, tables, SFX, ducking; both formats
+  gbm.c gbm.h         the driver: rows, notes, commands, tables, SFX, ducking; all three formats
   gbapu.c gbapu.h     the DMG APU, register-level (format 1)
-  vox.c vox.h         the extended synth (format 2)
+  vox.c vox.h         SID-style synth and studio sample player (formats 2/3)
   chip.c chip.h       driver + synth inside an audio callback, with a command queue
+  bank_codec.c/.h     lossless bank decoding on the loader's thread
   chiptune_pd.c/.h    the Playdate side: a sound source, Lua bindings
   chiptune_main.c     a stand-in eventHandler for games with no C of their own
   chiptune.cmake      the source list for a Playdate CMake project
-  music/              the demo songs and the SFX library, encoded
+  music/              the demo songs, SFX library and shared rock.gbank
 chiptune.lua          the Lua module (repo root, like the other modules)
 tools/chiptune.py     build the songs, encode, render, benchmark, run the tests
 ```
@@ -129,7 +137,104 @@ it is) and each effect `sfx_<name>.wav`. A looping song prints where its loop
 starts, for `fileplayer:setLoopRange`. You lose what only a live driver can
 do: sync markers, muting parts, effects stealing a channel.
 
+### Rendered music: the studio
+
+`studio/` renders what the chips cannot -- distorted guitars through an amp, orchestra hits,
+a mastered mix -- into seamless ADPCM loops for `jukebox.lua`, and into instrument samples
+(`studio/samples.cjs`, a sustain loop and a root note each) for a tracker. Node, no
+dependencies. See `studio/README.md` for its sound recipes and bank exporter.
+
+### Live studio samples: format 3
+
+```bash
+python tools/chiptune.py studio                    # Node + ffmpeg: build the shared bank and three themes
+python tools/build_demo.py --jukebox               # starts in the music player; simulator + device if toolchain is present
+python tools/chiptune.py render chiptune/music/steel_circuit.gbm build/steel_circuit.wav --bank chiptune/music/rock.gbank --mono
+python tools/chiptune.py render chiptune/music/steel_circuit.gbm unused.wav --bank chiptune/music/rock.gbank --bench
+```
+
+The demo Jukebox includes fifteen songs. Up/down selects a track, A plays,
+left/right switches live tracking and its rendered ADPCM stream. The mixer
+in the Chiptune exhibit still mutes individual live layers.
+
+```lua
+Chiptune.load{
+    banks = { band = "music/rock.gbank" },
+    songs = {
+        rock = { path = "music/steel_circuit.gbm", bank = "band" },
+        jungle = { path = "music/chrome_breaks.gbm", bank = "band" },
+        trance = { path = "music/prism_drive.gbm", bank = "band" },
+    },
+    sfx = "music/sfx.gbm",
+}
+Chiptune.play("rock")
+```
+
+Existing string song paths continue to work. SFX may also use `{path, bank}`.
+The native loader validates and deduplicates immutable banks; it retains them
+for the game session, so repeated songs do not duplicate the PCM in RAM.
+Loading and copying happen on the game thread. The queue delivers a song and
+its bank together; the audio callback never reads files or allocates memory.
+
+To compose with your own studio bank:
+
+```python
+from gbm_compose import Song, studio_bank
+from gbm_format import encode_song
+s = Song('Band', version=3, voices=2, groove=(6, 7))
+studio_bank(s, 'out/rock', rate=16384, only=['gtr_lead', 'kick'], out='band.gbank')
+s.bar(['A4@gtr_lead . E5+318 . . . -', 'C5@kick . . . C5 . . .'])
+open('band.gbm', 'wb').write(encode_song(s.project()))
+```
+
+`studio_bank` reads PCM16 mono WAVs and `bank.json`, filters/resamples with
+ffmpeg, reassembles the loop seam, and quantises with deterministic TPDF
+dither. Use the same selection and rate for every song sharing a bank.
+Alternatively `python tools/chiptune.py bank out/rock band.gbank --rate 16384`
+builds just the bank. Pattern notes are GBM numbers from C1=0; bank roots are
+MIDI (C1=24). PCM8 slides, vibrato and table pitch offsets use 1/16-semitone
+steps; synth voices and formats 1/2 keep their original period semantics.
+An instrument may set `release` (milliseconds, zero keeps the original hard
+cut) and `mixGain`. A PCM retrigger retains one bounded release overlap per
+voice. Pause, mute and stop still silence it immediately.
+
+### Porting the studio arrangement
+
+`python tools/build_studio_port.py --publish` records the original menu,
+play and multi songs, builds their shared bank, calibrates LUFS, mechanically
+checks the encoded notes/gates and generates A/B reports before copying the
+accepted assets to `music/`. The Jukebox starts on Studio Menu and compares
+the live port with the original studio master. See
+[studio/README.md](studio/README.md#the-original-studio-arrangements).
+
+The original ports use `tickRate` (ticks/second) with a straight `(6,)`
+groove, and `mixGain` to enable the output stage: 40 Hz DC blocker, block RMS
+glue compressor, soft clip and a -1 dBFS peak limiter. Existing songs use the
+original scheduler and output unless these extended format-3 fields are set.
+
 ## The demo songs
+
+The PCM themes in `tools/studio_theme.py` all use format 3, eight voices and
+`music/rock.gbank` (17 instruments, signed PCM8 at 16384 Hz):
+
+| Song | Style | Live arrangement |
+|---|---|---|
+| `steel_circuit.gbm` | rock, ~138 BPM | amplified power chords and chugs, a looped lead with portamento/vibrato, bass, kit, orchestra hit and a vox acid break |
+| `chrome_breaks.gbm` | jungle, ~171 BPM | chopped drum rows and ghost snares, looped reese, rave stabs, a pluck and pulse bleeps |
+| `prism_drive.gbm` | trance, ~133 BPM | four-on-the-floor kit, offbeat bass, looped supersaw, Am/F/G pads, pluck arpeggio, breakdown and acid build |
+
+Host callback benchmark: three runs of 60 seconds of audio in 256-frame
+buffers, MSVC `/O2` on Windows. Median cost per output stereo frame was
+13.2 ns (rock), 12.1 ns (jungle) and 13.6 ns (trance). `neon_acid` measured
+14.0 ns both before and after the sampler change. These are host timings,
+not a Cortex-M7 CPU percentage. Both SDK simulator and ARM builds pass;
+physical-device profiling remains separate.
+
+With release overlaps and mastering enabled, the original studio ports
+measured 23.4 ns (menu), 23.1 ns (play) and 25.3 ns (multi) per output stereo
+frame on the same host. The legacy `neon_acid` render remains byte-identical
+to the pre-change renderer (14.4 ns in the current run). Bank decoding runs
+before this benchmark, on the loader's thread.
 
 Each is a style and a set of chiptune techniques.
 
@@ -338,6 +443,39 @@ from wherever it is loaded.
 24  filter           format 2: cutoff, resonance << 4 | mode
 ```
 
+Format 3 keeps format 2's instruments, tables and pattern streams. Its header
+is 32 bytes: byte 2 is `3`, u16 at 26 is the external sample count, and u32 at
+28 is the bank's content identity. Offset 22 addresses an empty legacy
+sample directory. Song offsets remain u16; PCM is external.
+
+Bit 15 of the count marks the extended 40-byte header: u32 at 32 is tick
+rate in millihertz, u16 at 36 is output gain in Q8.8, bytes 38-39 reserved.
+Instrument byte 13 is release milliseconds; bytes 14-15 are per-voice Q8.8
+gain (zero means unity). Old 32-byte v3 songs keep their original behaviour.
+
+The `.gbank` layout (all integers little-endian):
+
+```
+0   'G' 'B' 'K' 1
+4   count:u16, reserved:u16=0, identity:u32
+12  count x [offset:u32, length:u32, rate:u32, root_millihz:u32,
+             loop_start:u32, loop_end:u32]
+... signed PCM8, one byte per mono sample
+```
+
+Loop end is exclusive; both loop bounds are zero for a one-shot. Data offsets
+are from the bank start. Identity is FNV-1a over the whole bank with bytes
+8-11 treated as zero, including metadata and PCM. The loader checks bounds,
+rates, loop geometry and identity before publishing the bank to the audio
+thread, then verifies that a song names that bank.
+
+`GBZ1` is a lossless on-disk wrapper: magic `GBZ` + byte 1, decoded size:u32,
+raw bank identity:u32, count:u16, reserved:u16, then delta/context arithmetic
+data. `bank_codec.c` reproduces the raw GBK1 bytes before validation. Its
+263168-byte model is temporary, never used by a playing voice. Both the
+native loader and host renderer accept raw or packed banks. Pure-C callers
+use `bank_raw_size`/`bank_unpack` before `gbm_sample_bank_check`.
+
 A pattern stream, per row: `[instrument] [command...]` then a note (`0x00-0x5F`),
 `0x60` note off, `0x61` end of an SFX, or `0x80+n` (this row and n more are
 empty). Instrument `0xC0+i` for 0-31, `0xF0 i` for any; command `0xE0|cmd val`,
@@ -349,7 +487,7 @@ names: `count { len bytes }*`, then the u16 length of that, then `NM`.
 ## Tests
 
 ```bash
-python tools/chiptune.py test    # format 1 against the original ROM, format 2 and vox, the encoder, the songs
+python tools/chiptune.py test    # ROM traces, formats 2/3, bank import, encoder and shipped songs; ffmpeg for resampling
 lua test/run.lua                 # chiptune.lua, among the rest
 ```
 

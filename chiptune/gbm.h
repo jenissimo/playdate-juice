@@ -11,13 +11,16 @@
    and gets the channel back, retriggered, when the effect ends. While any
    SFX plays the other music channels are ducked.
 
-   Two formats. Format 1 is the original's, played on gbapu and held to the
+   Three sound families. Format 1 is the original's, played on gbapu and held to the
    original write for write. Format 2 (chiptune/README.md) is this port's
    own: up to 8 voices, each instrument picking its oscillator (and a table
    switching it frame by frame, as SID drums do), continuous pulse width and
    PWM, triangle and saw, ring modulation, hard sync and a resonant filter;
    it plays on vox. Everything else -- rows, commands, tables, SFX, ducking
-   -- is the same machinery.
+   -- is the same machinery. Format 3 adds studio PCM8 instruments: a shared
+   external bank, each sample's rate and root, interpolated sustain loops,
+   and semitone-based pitch that is not constrained by DMG periods. It uses
+   vox's mixer and can combine samples with the format-2 oscillators.
 
    Not thread-safe: one thread owns a Gbm. chip.h wraps it for an audio
    callback. */
@@ -50,6 +53,7 @@ typedef struct {
 
 typedef struct {
     const uint8_t *base, *ins, *tbl, *wave;
+    const uint8_t *samples;          /* format 3: checked external PCM8 bank */
     uint8_t version, rec, trow;        /* format; instrument and table-row sizes */
 } GbmBank;
 
@@ -65,6 +69,7 @@ typedef struct Gbm {
     const uint8_t *patdir[GBM_VOICES];
     const uint8_t *sfxdir;
     uint8_t nv, v2;                     /* music channels; playing on vox */
+    uint32_t frame_cycles;             /* v3 may specify a straight musical clock */
     const uint8_t *orders, *groove, *groovetab;
     uint8_t rows, order_count, loop_order, tick_n, groove_pos;
     uint8_t jump, brk, paused, muted;
@@ -89,6 +94,7 @@ typedef struct Gbm {
 /* `vox` may be NULL: format-2 blobs then play silent. */
 void gbm_init(Gbm *g, GbApu *apu, Vox *vox);
 void gbm_play(Gbm *g, const uint8_t *song);
+void gbm_play_bank(Gbm *g, const uint8_t *song, const uint8_t *samples);
 void gbm_seek(Gbm *g, uint8_t order, uint8_t row);
 void gbm_stop(Gbm *g);
 void gbm_pause(Gbm *g, uint8_t paused);
@@ -96,6 +102,7 @@ void gbm_pause(Gbm *g, uint8_t paused);
 void gbm_tick(Gbm *g);
 
 void gbm_sfx_bank(Gbm *g, const uint8_t *bank);
+void gbm_sfx_bank_samples(Gbm *g, const uint8_t *bank, const uint8_t *samples);
 /* Starts effect `id` from the SFX bank. Returns 0 if a higher-priority effect
    holds every slot it could use, or there is no such effect. */
 uint8_t gbm_sfx(Gbm *g, uint8_t id);
@@ -120,4 +127,7 @@ void gbm_volume(Gbm *g, uint8_t level);
 
 /* The blob's own checks: 0 if `bytes` can be played. */
 int gbm_check(const uint8_t *bytes, uint32_t len);
+/* These run on the loader's thread, before publishing immutable data. */
+int gbm_sample_bank_check(const uint8_t *bytes, uint32_t len);
+int gbm_sample_bank_match(const uint8_t *song, const uint8_t *checked_bank);
 #endif
