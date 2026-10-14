@@ -11,6 +11,7 @@ import "shake"
 import "particles"
 import "jukebox"
 import "chiptune"
+import "credits"
 
 local gfx <const> = playdate.graphics
 local W <const> = 400
@@ -237,6 +238,7 @@ local EXHIBITS = {
     { id = "music",       name = "Chiptune: Music",   blurb = "18 songs: Game Boy, SID and PCM band", fx = "Scanline" },
     { id = "sfx",         name = "Chiptune: SFX",     blurb = "84 effects that duck the music",      fx = "Pixel Shift" },
     { id = "jukebox",     name = "Jukebox",           blurb = "Three sounds: live tracker or stream", fx = "Fade" },
+    { id = "credits",     name = "Credits",           blurb = "Rolls and cards; the crank scrubs",   fx = "Blink" },
 }
 local hubSel = 1
 local hubSpring = Tween.newSpring(0, 3)
@@ -738,6 +740,72 @@ do
                     "The same arrangement, streamed from a rendered audio loop.", 222, 105, 154, 80)
             end
             footer("up/down track   A play   left/right live/stream   B back")
+        end,
+    }
+end
+
+-- ─── credits ───────────────────────────────────────────────────────────────
+
+do
+    -- The roll is the module; everything around it is the rest of the zoo,
+    -- wired in through cues: typing clicks from the SFX bank, a spark burst
+    -- as the paw lands mid-screen, a jolt and a jingle on THE END.
+    local stars = Backgrounds.indexOf("Starfield") or 1
+    local jolt = Shake.new("hit")
+    local sparks = Particles.new(120, { seed = 11, color = "white" })
+    local roll
+
+    local function build()
+        roll = Credits.new({
+            { title = "JUICE ZOO", sub = "every module of playdate-juice" },
+            { heading = "Modules" },
+            { role = "Transitions", name = "23 wipes" },
+            { role = "Chiptune", names = { "Game Boy", "SID voices", "studio PCM" } },
+            { role = "Jukebox", name = "streamed music" },
+            { role = "Tween", name = "31 easings" },
+            { role = "Shake", name = "trauma" },
+            { role = "Particles", name = "pooled, 1-bit" },
+            { role = "Backgrounds", name = "17 loops" },
+            { role = "Credits", name = "this roll" },
+            { heading = "Borrowed from" },
+            { names = { "Nyandoku", "gameboy-lab", "playdate-transitions" } },
+            { rule = true },
+            { image = "images/paw_print", ink = true, hold = 40,
+              on = function(_, _, x, y) sparks:emit(x, y, "burst", 20); blip("magic") end },
+            { text = "Crank to scrub. Hold A to fast-forward. B skips to the end." },
+            { card = "THE END", hold = 60, on = function() jolt:add(0.6); blip("win") end },
+            { card = { { heading = "Thanks for visiting" }, { name = "B: back to the hub" } } },
+        }, {
+            invert = true,
+            fit = 30 * 40,
+            background = function() Backgrounds.draw(stars) end,
+            onType = function() blip("text") end,
+        })
+    end
+
+    scenes.credits = {
+        enter = function()
+            if not roll then build() end
+            roll:restart()
+            sparks:clear()
+            Chiptune.play("willow_lane")
+        end,
+        input = function()
+            -- the roll reads the crank, A and B itself; B only leaves once
+            -- it has nothing left to skip
+            if roll.done and pressed(B) then go("hub", "Blink", "back") end
+        end,
+        update = function()
+            Backgrounds.update(stars)
+            roll:update()
+            jolt:update()
+            sparks:update()
+        end,
+        draw = function()
+            Shake.apply(jolt)
+            roll:draw()
+            sparks:draw()
+            Shake.pop()
         end,
     }
 end

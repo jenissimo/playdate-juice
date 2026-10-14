@@ -13,3 +13,6 @@ demo/Source/pdex.*
 # Host binaries and CMake trees from tools/chiptune.py and tools/build_demo.py.
 build/
 __pycache__/
+# Project skills in .claude/skills are part of the repo; personal Claude Code
+# settings are not.
+.claude/settings.local.json
