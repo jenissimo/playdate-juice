@@ -48,13 +48,13 @@ typedef struct {
        it in locals for a whole call and writes back what changed, once, in
        one run (on the Playdate the voices live in the heap, where a scattered
        store is a slow trip to external RAM). The busiest first. */
-    uint32_t pos;                   /* pcm: 20.12 fixed point */
+    uint32_t pos;                   /* pcm, and a PCM8 sample: 20.12 fixed point */
     float out_l, out_r;             /* pcm: the last output, for a declick */
     float phase;                    /* 0..1 per cycle */
     int32_t env_count;
     float gl, gr;                   /* pcm: the gains the last block ended on */
     float dc_l, dc_r;               /* an interrupted note's last output, decaying */
-    float smp_pos;                  /* sample */
+    float smp_pos;                  /* sample (PCM8: pos in frames, for reading) */
     float release_gain;             /* bank PCM8 release, kept with moving state */
     int32_t sweep_count, sweep_timer;
     uint16_t lfsr;                  /* noise */

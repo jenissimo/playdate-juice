@@ -117,7 +117,11 @@ Calls from the game reach the audio callback through a queue.
 or division per sample. Moving voice state stays in local stack variables
 for a callback and is written back only when changed. `VOX_BLOCK` defaults
 to 64; mastered studio playback caps its blocks at 32 to keep the calibrated
-output. Release tails also keep their moving state on the stack. Measure
+output. Release tails also keep their moving state on the stack. Sampled
+voices, format 3's and format 4's alike, keep their position in 20.12 fixed
+point and play in runs cut at the loop's end or the sample's, with nothing
+tested inside a run (a format-4 voice once tested a float position three
+times a sample, at 1.5-1.7 times the cost). Measure
 with `python tools/chiptune.py render song.gbm x.wav --bench`; host timing
 is not a physical-device CPU percentage.
 
@@ -240,18 +244,19 @@ The PCM themes in `tools/studio_theme.py` all use format 4, eight voices and
 | `prism_drive.gbm` | trance, ~133 BPM | four-on-the-floor kit, offbeat bass, looped supersaw, Am/F/G pads, pluck arpeggio, breakdown and acid build |
 
 Host callback benchmark: three runs of 60 seconds of audio in 256-frame
-buffers, MSVC `/O2` on Windows. Median cost per output stereo frame was
-13.2 ns (rock), 12.1 ns (jungle) and 13.2 ns (trance). `neon_acid` measured
-14.0 ns both before and after the sampler change. These are host timings,
-not a Cortex-M7 CPU percentage. Both SDK simulator and ARM builds pass;
-physical-device profiling remains separate.
+buffers, MSVC `/O2` on Windows. Median cost per output stereo frame is
+8.7 ns (rock), 6.8 ns (jungle) and 7.9 ns (trance), down from 12.8, 11.7 and
+13.2 ns before the PCM8 voice moved to fixed point. `neon_acid` measures
+13.6 ns, unchanged. These are host timings, not a Cortex-M7 CPU percentage.
+Both SDK simulator and ARM builds pass; physical-device profiling remains
+separate.
 
 With release overlaps and mastering enabled, the original studio ports
-measured 23.4 ns (menu), 23.1 ns (play) and 26.5 ns (multi) per output stereo
-frame on the same host. All twelve songs from master, including the embedded
-FT2 jungle tracks, render byte-identically to the master reference
-(`neon_acid`: 14.0 ns; `jungle_ride`: 11.3 ns). Bank decoding runs
-before this benchmark, on the loader's thread.
+measure 15.5 ns (menu), 15.1 ns (play) and 17.0 ns (multi) per output stereo
+frame on the same host (23.1, 23.1 and 25.7 ns before). All twelve songs from
+master, including the embedded FT2 jungle tracks, render byte-identically to
+the master reference (`neon_acid`: 13.6 ns; `jungle_ride`: 11.0 ns). Bank
+decoding runs before this benchmark, on the loader's thread.
 
 Each is a style and a set of chiptune techniques.
 
