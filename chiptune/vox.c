@@ -134,6 +134,7 @@ void vox_trigger(Vox *x, int i, uint8_t osc, uint16_t pitch, uint8_t env)
        times a second in a 9x2 tremolo. The wave's position does restart. */
     if (v->osc == OSC_WAVE) v->phase = 0.0f;
     if (v->osc == OSC_PCM) pcm_restart(v);
+    else v->pos = 0;                 /* a PCM8 note's fixed-point position */
     v->smp_pos = 0.0f;
     v->releasing = 0; v->release_gain = 1.0f;
     v->lfsr = 0x7FFF;
@@ -152,7 +153,7 @@ void vox_osc(Vox *x, int i, uint8_t osc)
     VoxVoice *v = &x->v[i];
     pcm_release(x, v);
     v->osc = osc < OSC_COUNT ? osc : OSC_PULSE;
-    if (v->osc == OSC_SAMPLE) v->smp_pos = 0.0f;
+    if (v->osc == OSC_SAMPLE) { v->smp_pos = 0.0f; v->pos = 0; }
     if (v->osc == OSC_PCM) pcm_restart(v);
 }
 void vox_width(Vox *x, int i, uint8_t w)
@@ -172,7 +173,7 @@ void vox_sample8(Vox *x, int i, const uint8_t *d, uint32_t n,
                  uint32_t rate, uint32_t root_millihz, uint32_t start, uint32_t end)
 {
     VoxVoice *v = &x->v[i];
-    v->smp = d; v->smp_len = n; v->smp_pos = 0; v->smp_bits = 8;
+    v->smp = d; v->smp_len = n; v->smp_pos = 0; v->pos = 0; v->smp_bits = 8;
     v->smp_loop_start = start; v->smp_loop_end = end;
     v->smp_scale = root_millihz ? (float)rate / ((float)root_millihz * 0.001f * (float)x->rate) : 0.0f;
 }
@@ -393,40 +394,74 @@ static int declick(const Vox *x, const VoxVoice *v, Moving *h, float *bl, float 
    eight voices, 0.5 KB). */
 #define BLOCK VOX_BLOCK
 
+/* Format 4's PCM8, played the way OSC_PCM plays format 3's: the position in
+   20.12 fixed point (Moving.pos, unused by any other oscillator of a sample
+   voice), runs cut at the loop's end or the sample's -- the inner loop reads
+   two frames and adds, one division a run -- and the frame before the
+   boundary on its own, its neighbour the loop's start or silence. A float
+   position tested three times a sample cost 1.5-1.7 times as much (Moto
+   Madness's studio songs, host). smp_pos follows the position in frames,
+   for whoever reads the voice; the fixed point is what plays, so a render
+   does not depend on how the callback cuts its blocks. */
 static void sample8_block(const VoxVoice *v, Moving *h, float amp, float *dl, float *dr, int m)
 {
-    float pos = h->smp_pos;
-    const uint8_t *d = v->smp;
-    const float end = (float)v->smp_len;
+    const int8_t *d = (const int8_t *)v->smp;
     const uint32_t a = v->smp_loop_start, b = v->smp_loop_end;
-    const float span = (float)(b - a), inv_span = b ? 1.0f / span : 0.0f;
-    int k;
-    amp *= 1.0f / 128.0f;
-    for (k = 0; k < m && h->on; k++) {
-        float o = 0.0f;
-        if (d && pos < end) {
-            uint32_t st = (uint32_t)pos, next = st + 1;
-            float frac = pos - (float)st, p, q;
-            if (b && next >= b) next = a;
-            p = (float)(d[st] < 128 ? d[st] : (int)d[st] - 256);
-            q = next < v->smp_len ? (float)(d[next] < 128 ? d[next] : (int)d[next] - 256) : 0.0f;
-            o = (p + (q - p) * frac) * amp;
-            pos += v->inc;
-            if (b && pos >= (float)b) {
-                pos -= (float)((uint32_t)((pos - (float)a) * inv_span)) * span;
-                if (pos >= (float)b) pos -= span;
-                if (pos < (float)a) pos += span;
+    const uint32_t frames = b ? b : v->smp_len;     /* where the voice wraps, or stops */
+    const float g = amp * (1.0f / (128.0f * 4096.0f));
+    const float rs = v->releasing ? v->release_step : 0.0f;
+    uint32_t pos = h->pos, step = (uint32_t)(v->inc * 4096.0f + 0.5f);
+    float rg = h->release_gain;
+    int k = 0;
+    if (!d || !frames) { h->on = 0; return; }
+    if (!step) step = 1;
+    while (k < m) {
+        uint32_t run, j;
+        if ((pos >> 12) >= frames) {
+            if (!b) { h->on = 0; break; }
+            pos = (a << 12) + (pos - (a << 12)) % ((b - a) << 12);
+        }
+        if ((pos >> 12) + 1 < frames) {
+            /* every frame up to the one before the boundary reads its neighbour in place */
+            run = (((frames - 1) << 12) - pos + step - 1) / step;
+            if (run > (uint32_t)(m - k)) run = (uint32_t)(m - k);
+            if (rs == 0.0f) {
+                for (j = 0; j < run; j++, k++) {
+                    const int8_t *sp = d + (pos >> 12);
+                    const int32_t s0 = sp[0];
+                    const float o = (float)(s0 * 4096 + (sp[1] - s0) * (int32_t)(pos & 4095u)) * g;
+                    dl[k] += o; dr[k] += o;
+                    pos += step;
+                }
+            } else {
+                if ((float)run * rs > rg) run = (uint32_t)(rg / rs) + 1;    /* not past silence */
+                for (j = 0; j < run; j++, k++) {
+                    const int8_t *sp = d + (pos >> 12);
+                    const int32_t s0 = sp[0];
+                    const float o = (float)(s0 * 4096 + (sp[1] - s0) * (int32_t)(pos & 4095u)) * g * rg;
+                    dl[k] += o; dr[k] += o;
+                    pos += step;
+                    rg -= rs;
+                }
             }
+        } else {
+            const int32_t s0 = d[pos >> 12], s1 = b ? d[a] : 0;
+            float o = (float)(s0 * 4096 + (s1 - s0) * (int32_t)(pos & 4095u)) * g;
+            if (rs != 0.0f) { o *= rg; rg -= rs; }
+            dl[k] += o; dr[k] += o;
+            pos += step;
+            k++;
         }
-        if (v->releasing) {
-            o *= h->release_gain;
-            h->release_gain -= v->release_step;
-            if (h->release_gain <= 0.0f) h->on = 0;
-        }
-        dl[k] += o; dr[k] += o;
-        if (!d || (!b && pos >= end)) h->on = 0;
+        if (rs != 0.0f && rg <= 0.0f) { h->on = 0; break; }
     }
-    h->smp_pos = pos;
+    /* the position kept inside the loop between calls, as smp_pos always was */
+    if ((pos >> 12) >= frames) {
+        if (b) pos = (a << 12) + (pos - (a << 12)) % ((b - a) << 12);
+        else h->on = 0;
+    }
+    h->pos = pos;
+    h->release_gain = rg;
+    h->smp_pos = (float)pos * (1.0f / 4096.0f);
 }
 
 static float output_clip(float s)
