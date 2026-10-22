@@ -390,6 +390,23 @@ do
     local follow = Tween.newSpring(200, 9)
     local target = 200
 
+    -- Back and elastic easings overshoot 0..1: the plot fits the curve's own
+    -- range, sampled once per easing, and marks where 0 and 1 are.
+    local ranges = {}
+    local function range(name)
+        local r = ranges[name]
+        if not r then
+            local f, lo, hi = Tween.ease[name], 0, 1
+            for i = 0, 90 do
+                local v = f(i / 90)
+                lo, hi = min(lo, v), max(hi, v)
+            end
+            r = { lo, hi }
+            ranges[name] = r
+        end
+        return r[1], r[2]
+    end
+
     -- A finished tween's node goes back to the pool, so the handle is only
     -- held while it runs: onComplete drops it.
     local function replay()
@@ -422,20 +439,25 @@ do
             header("Tween", #names .. " easings")
             list(names, sel, 10, 30, 150, 15, 12, spring)
             -- The curve, sampled; the ball rides it.
-            local gx, gy, gw, gh = 205, 44, 180, 100
+            local gx, gy, gw, gh = 205, 34, 180, 116
             gfx.setColor(gfx.kColorBlack)
             gfx.setDitherPattern(0.5, gfx.image.kDitherTypeBayer4x4)
             gfx.drawRect(gx, gy, gw, gh)
-            gfx.setColor(gfx.kColorBlack)
             local f = Tween.ease[names[sel]]
-            local px, py = gx, gy + gh
-            for i = 1, 45 do
-                local t = i / 45
-                local x, y = gx + t * gw, gy + gh - f(t) * gh
+            local lo, hi = range(names[sel])
+            local top, span = gy + 3, gh - 6
+            local function plotY(v) return top + span - (v - lo) / (hi - lo) * span end
+            if lo < 0 then gfx.drawLine(gx, plotY(0), gx + gw, plotY(0)) end
+            if hi > 1 then gfx.drawLine(gx, plotY(1), gx + gw, plotY(1)) end
+            gfx.setColor(gfx.kColorBlack)
+            local px, py = gx, plotY(f(0))
+            for i = 1, 60 do
+                local t = i / 60
+                local x, y = gx + t * gw, plotY(f(t))
                 gfx.drawLine(px, py, x, y)
                 px, py = x, y
             end
-            local bx, by = gx + ball.t * gw, gy + gh - f(ball.t) * gh
+            local bx, by = gx + ball.t * gw, plotY(f(ball.t))
             gfx.fillCircleAtPoint(bx, by, 4)
             gfx.fillRect(gx - 12, by - 1, 6, 3)
             -- The spring chasing a target the crank moves: no fixed end to ease to.

@@ -4,6 +4,8 @@ Drop-in game-feel modules for [Playdate](https://play.date/): scene
 transitions, chiptune music and sound effects, streamed music, tweens, screen
 shake, particles, animated backgrounds and end credits.
 
+![The Juice Zoo: the hub over a plasma background, a hop into Shake & Particles and back](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/hero.gif)
+
 Eight independent modules. Take one, take all of them — nothing here imports
 anything else in the repo. Seven are single Lua files; chiptune is a Lua file
 plus a C extension (`chiptune/`).
@@ -56,6 +58,8 @@ function playdate.update()
     Transitions.draw(function() currentScene:draw() end)
 end
 ```
+
+![Circle, Diamond Wave, Clock Wipe, Melt, Shatter, Hexagons, Paw Walk and Spiral, each way](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/transitions.gif)
 
 23 effects: Slide, Fade, Dissolve, Circle, Diamonds, Diamond Wave, Triangles,
 Bubbles, Blinds, Clock Wipe, Wave Wipe, Interleave, Dither Bands, Spiral, Wind,
@@ -138,6 +142,8 @@ The original studio menu/play/multi arrangements are also ported, with exact
 musical clocks, release overlaps and mastering. Their shared bank is 401 KiB
 on disk (703 KiB decoded); the demo offers A/B with the original studio mix.
 
+![Crimson Clash on the Zoo's mixer: live channel meters, channels muted and back](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/music.gif)
+
 It needs its C half built into the game (a few lines of CMake). Without it,
 `tools/chiptune.py render-all` turns the same music into ADPCM files for
 Jukebox. Everything else: [chiptune/README.md](chiptune/README.md).
@@ -151,6 +157,8 @@ local spring = Tween.newSpring(0, 0.2)
 
 function playdate.update() Tween.update() end
 ```
+
+![outBack, outBounce, outElastic, inOutCubic and inOutBack riding their curves; a spring chasing its target](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/tween.gif)
 
 The SDK already has `playdate.easingFunctions` and `playdate.timer`. This
 module exists for what they don't do: run on the host (so your animation logic
@@ -175,6 +183,11 @@ ps:update(); ps:draw()
 
 Backgrounds.update(); Backgrounds.draw(1)
 ```
+
+<p>
+<img src="https://raw.githubusercontent.com/jenissimo/playdate-juice/media/impact.gif" width="49%" alt="Hits, a quake, sparks and a crank-driven fountain">
+<img src="https://raw.githubusercontent.com/jenissimo/playdate-juice/media/backgrounds.gif" width="49%" alt="A tour of the backgrounds: Starfield, Radar, Spirograph, Lava Lamp, Dither Hills, Plasma, Matrix Rain, Fire, Moire, Lightning, Terrain">
+</p>
 
 `Shake` is trauma-based with seeded, reproducible noise. `Particles` preallocates
 its pool and drops rather than allocating on overflow (`sys.dropped` tells you
@@ -201,6 +214,8 @@ function playdate.update()
     roll:draw()
 end
 ```
+
+![The Zoo's own credits over a starfield, fast-forwarded with A to THE END](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/credits.gif)
 
 A script of titles, headings, role/name pairs (film-style split, dotted
 leaders or stacked), name grids, paragraphs, logos and dividers becomes a roll
@@ -229,6 +244,18 @@ python tools/build_demo.py --lua-only # no C compiler: runs without chiptune
 Then open `demo/Juice.pdx`. The build needs the Playdate SDK, CMake and a host
 C compiler for the extension; `ARM_GCC_BIN` can point at a toolchain that is
 not on PATH.
+
+The GIFs in this README are filmed in the Zoo itself: `demo/record.lua.in`
+plays it with scripted presses and crank turns, and every frame of a clip is
+written out and encoded in the Playdate's two colours.
+
+```bash
+python tools/record_gifs.py           # build, film in the simulator, encode into build/gifs/ (needs Pillow)
+python tools/record_gifs.py --encode-only tween   # re-encode frames already filmed
+```
+
+They live on the `media` branch rather than here, so a game that submodules
+this repo does not get a dozen megabytes of GIFs copied into its `.pdx`.
 
 ## Comics skill
 
