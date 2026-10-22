@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the demo (the Zoo) .pdx.
 
-    python tools/build_demo.py [--lua-only] [--no-device] [--jukebox]
+    python tools/build_demo.py [--lua-only] [--no-device] [--jukebox] [--record DIR]
 
 The library modules live at the repo ROOT so that a consumer can add this repo
 as a submodule straight inside their Source/ and `import "juice/tween"`. pdc,
@@ -23,6 +23,10 @@ On top of the Lua, the Zoo stages:
              with the host compiler, and for the device when arm-none-eabi-gcc
              is on PATH (or ARM_GCC_BIN points at its bin/). --lua-only skips
              it: the Zoo then runs without chiptune, and says so.
+
+--record DIR builds demo/Juice-Record.pdx for tools/record_gifs.py: the Zoo
+played by demo/record.lua.in, writing its frames into DIR (simulator only, no
+jukebox tracks).
 """
 import os
 import shutil
@@ -134,7 +138,12 @@ def main():
     lua_only = "--lua-only" in sys.argv
     device = "--no-device" not in sys.argv
     jukebox = "--jukebox" in sys.argv
-    out = os.path.join(DEMO_DIR, "Juice-Tracker.pdx") if jukebox else OUT
+    record = sys.argv[sys.argv.index("--record") + 1] if "--record" in sys.argv else None
+    if record:
+        device = False
+        out = os.path.join(DEMO_DIR, "Juice-Record.pdx")
+    else:
+        out = os.path.join(DEMO_DIR, "Juice-Tracker.pdx") if jukebox else OUT
     sdk = find_sdk()
     staged = []
     staged_dirs = []
@@ -149,13 +158,21 @@ def main():
 
         for f in sorted(os.listdir(DEMO_DIR)):
             if f.endswith(".lua.in"):
+                if f == "record.lua.in" and not record:
+                    continue
                 dst = os.path.join(DEMO, f[:-3])      # strip the ".in"
                 shutil.copy2(os.path.join(DEMO_DIR, f), dst)
+                with open(dst, encoding='utf-8') as source:
+                    text = source.read()
                 if jukebox and f == 'main.lua.in':
-                    with open(dst, encoding='utf-8') as source:
-                        text = source.read().replace('local current = "hub"', 'local current = "jukebox"')
-                    with open(dst, 'w', encoding='utf-8') as source:
-                        source.write(text)
+                    text = text.replace('local current = "hub"', 'local current = "jukebox"')
+                if record and f == 'main.lua.in':
+                    # first, so the fake input is in place before main caches it
+                    text = 'import "record"\n' + text + '\nRecord.install()\n'
+                if record and f == 'record.lua.in':
+                    text = text.replace('@OUT@', os.path.abspath(record).replace('\\', '/').rstrip('/') + '/')
+                with open(dst, 'w', encoding='utf-8') as source:
+                    source.write(text)
                 staged.append(dst)
 
         # The paw effect loads images/ from the pdx root by the same relative
@@ -166,7 +183,8 @@ def main():
             shutil.copytree(src, dst, dirs_exist_ok=True)
             staged_dirs.append(dst)
         jb = os.path.join(DEMO, "jukebox")
-        render_jukebox(jb)
+        if not record:
+            render_jukebox(jb)
         staged_dirs.append(jb)
 
         if not lua_only:

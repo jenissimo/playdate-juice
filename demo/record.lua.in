@@ -1,0 +1,221 @@
+-- The README's GIFs, filmed in the real Zoo: a script of button presses and
+-- crank turns stands in for the player, and every frame of each clip is
+-- written out as a PNG. Built only by `tools/record_gifs.py`, which injects
+-- `import "record"` at the top of main.lua (before it caches the input
+-- functions) and `Record.install()` at the bottom (after playdate.update).
+--
+-- The simulator prints one line per finished clip:
+--   record: cut <name> <frames> <every>
+-- and record_gifs.py turns <name>-NNNN.png into <name>.gif from those.
+Record = {}
+
+local pd <const> = playdate
+local gfx <const> = pd.graphics
+local OUT <const> = "@OUT@"
+
+local UP, DOWN, LEFT, RIGHT = pd.kButtonUp, pd.kButtonDown, pd.kButtonLeft, pd.kButtonRight
+local A, B = pd.kButtonA, pd.kButtonB
+
+-- ─── the fake player ───────────────────────────────────────────────────────
+
+local down, just, crank = {}, {}, 0
+pd.buttonIsPressed = function(b) return down[b] == true end
+pd.buttonJustPressed = function(b) return just[b] == true end
+pd.buttonJustReleased = function() return false end
+pd.getCrankChange = function() return crank, crank end
+pd.getCrankTicks = function() return 0 end
+
+-- ─── the script ────────────────────────────────────────────────────────────
+
+local S = {}
+local function wait(n) S[#S + 1] = { "wait", nil, n } end
+local function hold(b, n) S[#S + 1] = { "hold", b, n } end
+local function tap(b, after) hold(b, 1); if after then wait(after) end end
+local function turn(deg, n) S[#S + 1] = { "crank", deg, n } end
+local function clip(name, every) S[#S + 1] = { "clip", name, every or 1 } end
+local function cut() S[#S + 1] = { "cut" } end
+-- Stops filming without ending the clip; clip(name) again carries on.
+local function pause() S[#S + 1] = { "pause" } end
+local function taps(b, n, after) for _ = 1, n do tap(b, 1) end; if after then wait(after) end end
+
+local function indexOf(list, name)
+    for i, v in ipairs(list) do if v == name then return i end end
+end
+
+-- Walks a wrapping list from `from` to `name` with DOWN taps; returns the new index.
+local function walk(list, from, name, after)
+    local to = indexOf(list, name)
+    if not to then return from end
+    taps(DOWN, (to - from) % #list, after or 6)
+    return to
+end
+
+-- The hub's exhibits, in menu order (main.lua's EXHIBITS).
+local HUB = { "transitions", "backgrounds", "tween", "impact", "music", "sfx", "jukebox", "credits" }
+local hub = 1
+local function enter(id)
+    hub = walk(HUB, hub, id, 10)
+    tap(A, 30)
+end
+
+local function build()
+    wait(45)                                      -- the menu song and the plasma settle
+
+    -- hero: the hub, a hop into Shake & Particles, a few hits, and back
+    clip("hero")
+    wait(25)
+    hub = walk(HUB, hub, "impact", 14)
+    tap(A, 30)
+    for _ = 1, 4 do tap(A, 7) end
+    tap(UP, 12); tap(DOWN, 4); tap(DOWN, 30)
+    tap(B, 40)
+    cut()
+
+    -- transitions: each effect into a card over a background, and back out
+    enter("transitions")
+    local sel = 1
+    clip("transitions")
+    for _, name in ipairs({ "Circle", "Diamond Wave", "Clock Wipe", "Melt", "Shatter", "Hexagons", "Paw Walk", "Spiral" }) do
+        sel = walk(Transitions.names, sel, name, 4)
+        tap(A, 24 + 22)
+        tap(B, 24 + 8)
+    end
+    cut()
+    tap(B, 30)
+
+    -- backgrounds: a tour of the loops
+    enter("backgrounds")
+    local bg = 1
+    for _, name in ipairs({ "Starfield", "Radar", "Spirograph", "Lava Lamp", "Dither Hills", "Plasma",
+                            "Matrix Rain", "Fire", "Moire", "Lightning", "Terrain" }) do
+        local to = Backgrounds.indexOf(name)
+        if to then
+            pause()
+            for _ = 1, (to - bg) % Backgrounds.count do tap(RIGHT, 1) end
+            bg = to
+            clip("backgrounds")
+            wait(32)
+        end
+    end
+    cut()
+    tap(B, 30)
+
+    -- tween: easings riding their curves, the spring chasing a target
+    enter("tween")
+    local ease = 1
+    clip("tween")
+    for i, name in ipairs({ "outBack", "outBounce", "outElastic", "inOutCubic", "inOutBack" }) do
+        ease = walk(Tween.easeNames, ease, name, 2)
+        wait(20)
+        tap(i % 2 == 1 and RIGHT or LEFT, 34)
+    end
+    cut()
+    tap(B, 30)
+
+    -- impact: shake and particles
+    enter("impact")
+    clip("impact")
+    wait(8)
+    for _ = 1, 6 do tap(A, 6) end
+    tap(UP, 30)
+    tap(DOWN, 4); tap(DOWN, 4); tap(DOWN, 20)
+    turn(90, 60)
+    tap(UP, 6); tap(A, 5); tap(A, 5); tap(A, 40)
+    cut()
+    tap(B, 30)
+
+    -- music: a song on the mixer, channels muted and back
+    enter("music")
+    taps(DOWN, 3, 6)                              -- Crimson Clash
+    tap(A, 30)
+    clip("music")
+    wait(30)
+    tap(RIGHT, 20)
+    tap(RIGHT, 8); tap(A, 30)
+    tap(RIGHT, 8); tap(A, 30)
+    tap(A, 20)
+    tap(LEFT, 8); tap(A, 40)
+    cut()
+    tap(B, 30)
+
+    -- credits: the roll, fast-forwarded with A, to THE END
+    enter("credits")
+    clip("credits", 2)
+    wait(150)
+    hold(A, 180)
+    wait(330)
+    cut()
+
+    S[#S + 1] = { "exit" }
+end
+
+-- ─── the player loop ───────────────────────────────────────────────────────
+
+local pc, act, left, first = 1, nil, 0, false
+local name, every, frame, tick = nil, 1, 0, 0
+local paused = nil
+
+local function nextTimed()
+    while pc <= #S do
+        local s = S[pc]
+        pc = pc + 1
+        local k = s[1]
+        if k == "clip" then
+            if paused and paused == s[2] then
+                name, paused = paused, nil
+            else
+                name, every, frame, tick = s[2], s[3], 0, 0
+            end
+        elseif k == "pause" then
+            paused, name = name, nil
+        elseif k == "cut" then
+            print(string.format("record: cut %s %d %d", name, frame, every))
+            name = nil
+        elseif k == "exit" then
+            print("record: done")
+            pd.simulator.exit()
+            return nil
+        else
+            return s
+        end
+    end
+end
+
+local function before()
+    for b in pairs(down) do down[b] = nil end
+    for b in pairs(just) do just[b] = nil end
+    crank = 0
+    if left <= 0 then
+        act = nextTimed()
+        if not act then return end
+        left, first = act[3], true
+    end
+    local k, v = act[1], act[2]
+    if k == "hold" then
+        down[v] = true
+        if first then just[v] = true end
+    elseif k == "crank" then
+        crank = v
+    end
+    first = false
+    left = left - 1
+end
+
+local function after()
+    if not name then return end
+    if tick % every == 0 then
+        frame = frame + 1
+        pd.simulator.writeToFile(gfx.getWorkingImage(), string.format("%s%s-%04d.png", OUT, name, frame))
+    end
+    tick = tick + 1
+end
+
+function Record.install()
+    build()
+    local update = pd.update
+    pd.update = function()
+        before()
+        update()
+        after()
+    end
+end
