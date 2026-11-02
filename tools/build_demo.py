@@ -42,6 +42,7 @@ BUILD = os.path.join(ROOT, "build")
 MODULES = [
     "transitions.lua", "jukebox.lua", "chiptune.lua",
     "tween.lua", "shake.lua", "particles.lua", "backgrounds.lua", "credits.lua",
+"ui.lua",
 ]
 JUKEBOX_SONGS = ["cloud_garden", "tidal_twang", "jungle_pulse", "crimson_clash", "willow_lane",
                 "hollow_deep", "neon_acid", "victory", "fade_out",
