@@ -13,6 +13,7 @@ import "jukebox"
 import "chiptune"
 import "credits"
 import "ui"
+import "reel"
 
 local gfx <const> = playdate.graphics
 local W <const> = 400
@@ -132,7 +133,8 @@ local function go(id, effect, dir)
     if leaving.leave then leaving.leave() end
     -- The snapshot is taken now: the screen still shows the outgoing scene.
     TransitionSounds.enabled = false
-    Transitions.start(effect or "Fade", dir or "fwd", 18)
+    -- "none": the scene starts on this very frame (the showreel's frame 0)
+    if effect ~= "none" then Transitions.start(effect or "Fade", dir or "fwd", 18) end
     current = id
     if scenes[id].enter then scenes[id].enter() end
 end
@@ -162,8 +164,9 @@ local EXHIBITS = {
     { id = "sfx",         name = "Chiptune: SFX",     blurb = "84 effects that duck the music",      fx = "Pixel Shift" },
     { id = "jukebox",     name = "Jukebox",           blurb = "Three sounds: live tracker or stream", fx = "Fade" },
     { id = "credits",     name = "Credits",           blurb = "Rolls and cards; the crank scrubs",   fx = "Blink" },
+    { id = "reel",        name = "Showreel",          blurb = "The trailer: 43 s to Iron Spire, B leaves", fx = "none" },
 }
-local hubList = UI.list({ items = EXHIBITS, x = 80, y = 56, w = 240, rowH = 17, visible = 8,
+local hubList = UI.list({ items = EXHIBITS, x = 80, y = 56, w = 240, rowH = 17, visible = 9,
                          label = function(e) return e.name end })
 local hubPop = 0     -- frames since the hub opened; the panel pops, then the rows slide in
 local hubBg = Backgrounds.indexOf("Plasma") or 1
@@ -177,8 +180,8 @@ scenes.hub = {
     input = function()
         navigate(hubList)
         if pressed(A) then
-            blip("select")
             local e = EXHIBITS[hubList.sel]
+            if e.fx ~= "none" then blip("select") end
             go(e.id, e.fx, "fwd")
         end
     end,
@@ -733,6 +736,11 @@ do
     }
 end
 
+-- ─── showreel ──────────────────────────────────────────────────────────────
+
+scenes.reel = Reel.scene({ bold = fontBold, title = fontTitle, mono = fontMono,
+                           back = function() go("hub", "Fade", "back") end })
+
 -- ─── the loop ──────────────────────────────────────────────────────────────
 
 scenes[current].enter()
@@ -743,7 +751,7 @@ function playdate.update()
     Chiptune.update()
     -- The music drives the reactive backgrounds (Terrain, Radar, Equalizer...).
     -- Silent or unavailable, this is all zeros and they look as they always did.
-    Backgrounds.setLevels(Chiptune.levels())
+    if not scenes[current].ownLevels then Backgrounds.setLevels(Chiptune.levels()) end
     tick = tick + 1
     local s = scenes[current]
     if not Transitions.active then s.input() end

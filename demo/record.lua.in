@@ -51,7 +51,7 @@ local function walk(list, from, name, after)
 end
 
 -- The hub's exhibits, in menu order (main.lua's EXHIBITS).
-local HUB = { "transitions", "backgrounds", "tween", "impact", "music", "sfx", "jukebox", "credits" }
+local HUB = { "transitions", "backgrounds", "tween", "impact", "music", "sfx", "jukebox", "credits", "reel" }
 local hub = 1
 local function enter(id)
     hub = walk(HUB, hub, id, 10)
@@ -180,6 +180,17 @@ local function build()
     wait(150)
     hold(A, 180)
     wait(330)
+    cut()
+    tap(B, 40)                                    -- the roll is done: back to the hub
+
+    -- reel: the showreel, from its first frame to the end of its hold. The
+    -- clip starts on the very frame A is pressed, which is the reel's frame 0
+    -- (the hub's blip is skipped for it), so frame 1 of the clip is frame 0 of
+    -- the song. The reel is driven by a frame counter: nothing here depends on
+    -- how fast the simulator manages to film.
+    hub = walk(HUB, hub, "reel", 10)
+    clip("reel")
+    tap(A, Reel.LENGTH - 1)
     cut()
 
     S[#S + 1] = { "exit" }

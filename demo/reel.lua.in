@@ -1,0 +1,643 @@
+-- The Showreel: a scripted trailer scene, the Zoo's last exhibit. Ironic text
+-- cards about game polish, joined by transitions, each card showing the
+-- library feature it is about, in time with Iron Spire (179 BPM).
+--
+-- It is filmed frame by frame (tools/record_gifs.py, clip "reel") and the
+-- audio is laid on afterwards, so everything here runs off ONE frame counter:
+-- never the clock and never the audio position. The song is started on frame
+-- 0 and left alone. F(bar, beat) turns the song's grid into frames; every
+-- event is placed with it. The channel levels that drive the music-reactive
+-- backgrounds are precomputed (tools/reel_levels.py), not read from the live
+-- driver, which would drift from the frame counter whenever filming is slow.
+--
+-- Staged by tools/build_demo.py; main.lua.in wires it in with Reel.scene().
+import "reel_levels"
+
+Reel = Reel or {}
+
+local pd <const> = playdate
+local gfx <const> = pd.graphics
+local floor <const> = math.floor
+local min <const> = math.min
+local max <const> = math.max
+local abs <const> = math.abs
+local sin <const> = math.sin
+local W <const> = 400
+local H <const> = 240
+local M <const> = 20                 -- the margin every card keeps
+local BEAT <const> = 10.0455         -- 179 BPM at 30 fps
+
+-- One bar is 4 beats; bar 0 beat 0 is frame 0.
+local function F(bar, beat) return floor((bar * 4 + (beat or 0)) * BEAT + 0.5) end
+Reel.F = F
+Reel.SONG_END = F(32, 0)
+Reel.LENGTH = F(32, 0) + 30          -- the song, then a second on the logo
+
+-- ─── state ─────────────────────────────────────────────────────────────────
+
+local B, T, MONO                     -- fonts: bold 10, medium 11, mono
+local back
+local f, si, ei = 0, 1, 1            -- frame, current segment, next event
+local segs, evs, evn = {}, {}, 0
+local lv                             -- decoded levels, 4 per frame
+local bgTerrain, bgEq, bgStars
+
+local introShake, slamShake, cardShake, bangShake, logoShake
+local psW, psB                       -- white sparks for black cards, black for white
+local roll
+local staticSel, menu, card, tweenSel = 1, nil, 1, 0
+
+local ITEMS <const> = { "Play", "Options", "Credits", "Quit" }
+local WIPES <const> = { "Slide", "Circle", "Melt", "Shatter", "Hexagons", "Clock Wipe", "Paw Walk", "Spiral" }
+
+-- ─── helpers ───────────────────────────────────────────────────────────────
+
+local function ez(name, p)
+    if p < 0 then p = 0 elseif p > 1 then p = 1 end
+    return Tween.ease[name](p)
+end
+local function lerp(a, b, e) return a + (b - a) * e end
+
+-- Events: sorted once by frame, then fired in order as the counter passes.
+local function ev(frame, fn)
+    evn = evn + 1
+    evs[evn] = { f = frame, n = evn, fn = fn }
+end
+local function sfx(frame, name) ev(frame, function() Chiptune.sfx(name) end) end
+
+-- Text as images, built once: the big type is a 1x line drawn scaled up (hard
+-- pixel edges), and the fades need an image.
+local imgs = {}
+local function img(str, font)
+    local byFont = imgs[font]
+    if not byFont then byFont = {}; imgs[font] = byFont end
+    local im = byFont[str]
+    if not im then
+        local w, h = font:getTextWidth(str) + 2, font:getHeight()
+        im = gfx.image.new(w, h, gfx.kColorClear)
+        gfx.pushContext(im)
+        gfx.setImageDrawMode(gfx.kDrawModeCopy)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.setFont(font)
+        gfx.drawText(str, 0, 0)
+        gfx.popContext()
+        byFont[str] = im
+    end
+    return im
+end
+
+-- Draws `str` scaled by s, anchored at x (ax 0 left, .5 centre, 1 right) and
+-- centred on cy. Returns the drawn box: left, top, width, height.
+local function big(str, font, s, x, cy, ax, white)
+    local im = img(str, font)
+    local w, h = im:getSize()
+    local dw, dh = floor(w * s), floor(h * s)
+    local dx, dy = floor(x - dw * ax), floor(cy - dh / 2)
+    if white then gfx.setImageDrawMode(gfx.kDrawModeFillWhite) end
+    if s == 1 then im:draw(dx, dy) else im:drawScaled(dx, dy, s) end
+    if white then gfx.setImageDrawMode(gfx.kDrawModeCopy) end
+    return dx, dy, dw, dh
+end
+
+-- The largest whole scale that keeps `str` inside maxW.
+local function fit(str, font, maxW, maxS)
+    return max(1, min(maxS, floor(maxW / font:getTextWidth(str))))
+end
+
+local faded = {}
+local function fadedImg(str, font, step)
+    local byStr = faded[str]
+    if not byStr then byStr = {}; faded[str] = byStr end
+    local im = byStr[step]
+    if not im then im = img(str, font):fadedImage(step / 6, gfx.image.kDitherTypeBayer8x8); byStr[step] = im end
+    return im
+end
+
+local function star(cx, cy, r)
+    if r < 1 then return end
+    gfx.drawLine(cx - r, cy, cx + r, cy)
+    gfx.drawLine(cx, cy - r, cx, cy + r)
+    local d = floor(r * 0.5)
+    if d > 0 then
+        gfx.drawLine(cx - d, cy - d, cx + d, cy + d)
+        gfx.drawLine(cx - d, cy + d, cx + d, cy - d)
+    end
+end
+
+-- A caption on a white card: a rule across the margins, the line under it.
+local function caption(text)
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(0, 188, W, H - 188)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawLine(M, 190, W - M, 190)
+    gfx.setFont(B)
+    gfx.drawTextAligned(text, W / 2, 206, kTextAlignment.center)
+end
+
+-- The same over a busy background: a panel, one or two centred lines.
+local function panelCaption(text, lines)
+    local h = lines == 1 and 34 or 50
+    local y = H - 12 - h
+    UI.panel(M, y, W - 2 * M, h)
+    gfx.setFont(B)
+    local lh = B:getHeight()
+    gfx.drawTextInRect(text, M + 12, y + floor((h - lines * lh) / 2), W - 2 * M - 24, lines * lh + 2,
+                       0, nil, kTextAlignment.center)
+end
+
+local function text1(str, font, x, y, align, white)
+    gfx.setFont(font)
+    if white then gfx.setImageDrawMode(gfx.kDrawModeFillWhite) end
+    gfx.drawTextAligned(str, x, y, align or kTextAlignment.left)
+    if white then gfx.setImageDrawMode(gfx.kDrawModeCopy) end
+end
+
+-- ─── the segments ──────────────────────────────────────────────────────────
+
+-- 0-3 intro: a terminal, one line a bar, typed a character a frame.
+local TERM <const> = {
+    { at = F(0, 0) + 6, text = "Your game works." },
+    { at = F(1, 0) + 4, text = "Collision: done. Saving: done." },
+    { at = F(2, 0) + 4, text = "Time to ship?" },
+    { at = F(3, 2) + 3, text = "Not quite.", instant = true },
+}
+local TX, TY, TDY = 64, 72, 24
+
+local function drawIntro(t, fr)
+    gfx.clear(gfx.kColorWhite)
+    Shake.apply(introShake)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.setFont(MONO)
+    local curY, curX, typing = 0, 0, false
+    for i = 1, #TERM do
+        local ln = TERM[i]
+        local n = fr - ln.at + 1
+        if n > 0 then
+            local len = #ln.text
+            if ln.instant or n > len then n = len end
+            local y = TY + (i - 1) * TDY
+            local s = ln.text:sub(1, n)
+            gfx.drawText(">", TX, y)
+            gfx.drawText(s, TX + 16, y)
+            curY, curX, typing = y, TX + 16 + MONO:getTextWidth(s), n < len
+        end
+    end
+    if curY > 0 and (typing or floor(fr / 8) % 2 == 0) then
+        gfx.fillRect(curX + 2, curY + 2, 7, 12)
+    end
+    Shake.pop()
+end
+
+-- 4-7: THE SECOND 90% slams in (bars 4-5), then it shrinks up and the
+-- sentence finishes (bars 6-7).
+local TB <const> = F(6, 0) - F(4, 0)
+local S1, S2, S3 = 3, 5, 3
+local POLISH = "...is polish."
+local SUB = "of making a game"
+local STARS <const> = { { -8, -22 }, { 12, 8 }, { -150, 12 }, { 156, -18 } }
+
+local function drawSlam(t)
+    gfx.clear(gfx.kColorBlack)
+    -- The wipe reveals a black card: the slam itself is for the downbeat.
+    if Transitions.capturing then return end
+    Shake.apply(slamShake)
+    local e = ez("outCubic", (t - TB) / 14)
+    local k = lerp(1.8, 1, ez("outBack", t / 10))
+    big("THE SECOND", T, lerp(S1, 2, e) * k, 200, lerp(66, 34, e), 0.5, true)
+    big("90%", T, lerp(S2, 3, e) * k, 200, lerp(140, 94, e), 0.5, true)
+    local step = min(6, floor((t - 12) / 4))
+    if step > 0 then
+        local im = fadedImg(SUB, B, step)
+        local w = im:getSize()
+        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+        im:draw(floor(200 - w / 2), floor(lerp(186, 132, e)))
+        gfx.setImageDrawMode(gfx.kDrawModeCopy)
+    end
+    local p = (t - TB - 8) / 14
+    if p > 0 then
+        local s = S3 * ez("outBack", p)
+        local x, y, w, h = big(POLISH, T, s, 200, 180, 0.5, true)
+        -- a gleam sweeps across the word, then it twinkles
+        local gt = (t - TB - 28) / 16
+        if gt > 0 and gt < 1 then
+            gfx.setClipRect(x, y, w, h)
+            gfx.setColor(gfx.kColorXOR)
+            local x0 = floor(x - 40 + (w + 80) * gt)
+            gfx.fillPolygon(x0 + 18, y, x0 + 34, y, x0 + 16, y + h, x0, y + h)
+            gfx.clearClipRect()
+        end
+        gfx.setColor(gfx.kColorWhite)
+        for i = 1, #STARS do
+            local ph = (t - TB - 40 - i * 5) / 18
+            if ph > 0 and ph < 1 then
+                local sx = STARS[i][1] + (i <= 2 and (x + w) or x)
+                star(sx, y + STARS[i][2] + 20, floor(8 * sin(ph * math.pi)))
+            end
+        end
+        gfx.setColor(gfx.kColorBlack)
+    end
+    psW:draw()
+    Shake.pop()
+end
+
+-- 8-11: the same menu, bare and juiced.
+local MENU_X, MENU_Y, MENU_W, MENU_H = 100, 30, 200, 140
+local ROW_X, ROW_Y, ROW_W, ROW_H = 116, 80, 168, 20
+
+local function menuFrame()
+    gfx.clear(gfx.kColorWhite)
+    UI.panel(MENU_X, MENU_Y, MENU_W, MENU_H)
+    gfx.setColor(gfx.kColorBlack)
+    text1("MY GAME", T, W / 2, MENU_Y + 14, kTextAlignment.center)
+    gfx.drawLine(ROW_X, 68, ROW_X + ROW_W, 68)
+end
+
+local function drawStaticMenu()
+    menuFrame()
+    gfx.setFont(B)
+    for i = 1, #ITEMS do
+        local y = ROW_Y + (i - 1) * ROW_H
+        if i == staticSel then
+            gfx.setColor(gfx.kColorBlack)
+            gfx.fillRect(ROW_X, y - 1, ROW_W, ROW_H)
+            gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+            gfx.drawText(ITEMS[i], ROW_X + 6, y)
+            gfx.setImageDrawMode(gfx.kDrawModeCopy)
+        else
+            gfx.drawText(ITEMS[i], ROW_X + 6, y)
+        end
+    end
+    caption("Menus that sit there like a spreadsheet.")
+end
+
+local function drawJuicedMenu()
+    menuFrame()
+    menu:draw()
+    caption("Menus that don't.")
+end
+
+-- 12-17: backgrounds that listen.
+local function drawTerrain()
+    Backgrounds.draw(bgTerrain)
+    panelCaption("Backgrounds that listen to the music.", 1)
+end
+local function drawEqualizer()
+    Backgrounds.draw(bgEq)
+    panelCaption("The music is a Game Boy tracker driver. Running in your audio callback. In C.", 2)
+end
+
+-- 18-19: Every. Thing. Eases.
+local WORDS <const> = {
+    { str = "Every.", ease = "outBounce", t0 = 0, y = 38 },
+    { str = "Thing.", ease = "outElastic", t0 = F(18, 2) - F(18, 0), y = 95 },
+    { str = "Eases.", ease = "outBack", t0 = F(19, 0) - F(18, 0), y = 152 },
+}
+local SENT_T <const> = F(19, 2) - F(18, 0)
+local SENT = "(Even this sentence.)"
+
+local function drawTween(t)
+    gfx.clear(gfx.kColorWhite)
+    gfx.setColor(gfx.kColorBlack)
+    for i = 1, #WORDS do
+        local w = WORDS[i]
+        local p = t - w.t0
+        if p >= 0 then
+            local y = lerp(-50, w.y, ez(w.ease, p / 24))
+            big(w.str, T, 3, 40, y, 0, false)
+        end
+    end
+    local p = t - SENT_T
+    if p >= 0 then
+        text1(SENT, B, lerp(-220, 40, ez("outCubic", p / 14)), 200, kTextAlignment.left)
+    end
+end
+
+-- 20-21: screen shake, growing.
+local SHAKE_S = 3
+local function drawShake()
+    gfx.clear(gfx.kColorWhite)
+    Shake.apply(cardShake)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.fillRect(-24, 176, W + 48, 40)
+    for i = 0, 5 do
+        local x = 36 + i * 62
+        local top = 128 - (i % 3) * 14
+        gfx.setDitherPattern(0.25 * (i % 3 + 1), gfx.image.kDitherTypeBayer8x8)
+        gfx.fillRect(x, top, 40, 176 - top)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawRect(x, top, 40, 176 - top)
+    end
+    local x, y, w, h = big("Screen shake.", T, SHAKE_S, 200, 70, 0.5, false)
+    Shake.pop()
+    caption("Subtlety is a myth.")
+end
+
+-- 22-23: particles.
+local function drawParticles()
+    gfx.clear(gfx.kColorWhite)
+    gfx.setColor(gfx.kColorBlack)
+    big("Particles.", T, 3, 40, 48, 0, false)
+    text1("Hundreds of them.", T, 40, 86, kTextAlignment.left)
+    text1("Pooled. Zero garbage.", B, 40, 112, kTextAlignment.left)
+    text1("live " .. psB.count .. " / " .. psB.capacity, MONO, W - M, M - 4, kTextAlignment.right)
+    psB:draw()
+end
+
+-- 24-25: one wipe a beat; the card is the effect's name.
+local function drawCard()
+    local dark = card % 2 == 1
+    gfx.clear(dark and gfx.kColorBlack or gfx.kColorWhite)
+    local name = WIPES[card]
+    local s = fit(name, T, 340, 5)
+    big(name, T, s, 200, 100, 0.5, dark)
+    gfx.setColor(dark and gfx.kColorWhite or gfx.kColorBlack)
+    text1("Transitions.start(\"" .. name .. "\", \"fwd\", 8)", MONO, W / 2, 162, kTextAlignment.center, dark)
+    for i = 1, #WIPES do
+        local x = 200 - (#WIPES * 14) / 2 + (i - 1) * 14 + 2
+        if i <= card then gfx.fillRect(x, 208, 8, 8) else gfx.drawRect(x, 208, 8, 8) end
+    end
+    gfx.setColor(gfx.kColorBlack)
+end
+
+-- 26-27: nobody, then everybody.
+local function drawNobody()
+    gfx.clear(gfx.kColorWhite)
+    gfx.setColor(gfx.kColorBlack)
+    text1("Nobody will notice.", B, W / 2, 112, kTextAlignment.center)
+end
+
+local function drawEverybody()
+    gfx.clear(gfx.kColorBlack)
+    Shake.apply(bangShake)
+    big("Everybody", T, 3, 200, 84, 0.5, true)
+    big("will notice.", T, 3, 200, 152, 0.5, true)
+    psW:draw()
+    Shake.pop()
+end
+
+-- 28-30: a credits roll that ends on bar 31's downbeat. It starts ROLL_LEAD
+-- frames in, so the title is already on its way up when the card appears.
+local ROLL_LEAD <const> = 26
+local function drawCredits(t)
+    roll:seek(min(t + ROLL_LEAD, roll.duration))
+    Backgrounds.draw(bgStars)
+    -- the roll stops above the caption panel instead of running under it
+    gfx.setClipRect(0, 0, W, H - 12 - 34 - 4)
+    roll:draw()
+    gfx.clearClipRect()
+    panelCaption("Credits that land on the last bar.", 1)
+end
+
+-- 31+: the logo.
+local LOGO = "playdate-juice"
+local TAG = "the second 90%, in Lua"
+local URL = "github.com/jenissimo/playdate-juice"
+local function drawLogo(t)
+    gfx.clear(gfx.kColorWhite)
+    Shake.apply(logoShake)
+    UI.panel(10, 10, W - 20, H - 20)
+    gfx.setColor(gfx.kColorBlack)
+    local s = fit(LOGO, T, 330, 3)
+    local k = UI.popScale(t, 10)
+    if k > 0 then big(LOGO, T, s * k, 200, 88, 0.5, false) end
+    if t >= 14 then
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawLine(160, 124, 240, 124)
+        text1(TAG, T, W / 2, 138, kTextAlignment.center)
+    end
+    if t >= 24 then text1(URL, MONO, W / 2, 178, kTextAlignment.center) end
+    psB:draw()
+    Shake.pop()
+end
+
+-- ─── the timeline ──────────────────────────────────────────────────────────
+
+local function build()
+    -- `tr` = { effect, frame to start it }: the wipe runs from there and ends
+    -- on the segment's first frame. No tr: a hard cut.
+    segs = {
+        { at = 0, draw = drawIntro },
+        { at = F(4, 0), tr = { "Interleave", F(3, 3) }, draw = drawSlam },
+        { at = F(8, 0), tr = { "Wave Wipe", F(7, 3) }, draw = drawStaticMenu },
+        { at = F(10, 0), draw = drawJuicedMenu },
+        { at = F(12, 0), tr = { "Scanline", F(11, 3) }, draw = drawTerrain, bg = "Terrain" },
+        { at = F(16, 0), tr = { "Pixel Shift", F(15, 3) }, draw = drawEqualizer, bg = "Equalizer" },
+        { at = F(18, 0), tr = { "Diamonds", F(17, 3) }, draw = drawTween },
+        { at = F(20, 0), tr = { "Blinds", F(19, 3) }, draw = drawShake },
+        { at = F(22, 0), tr = { "Bubbles", F(21, 3) }, draw = drawParticles },
+        { at = F(24, 0), draw = drawCard },
+        { at = F(26, 0), draw = drawNobody },
+        { at = F(27, 0), draw = drawEverybody },
+        { at = F(28, 0), tr = { "Dither Bands", F(27, 3) }, draw = drawCredits, bg = "Starfield" },
+        { at = F(31, 0), draw = drawLogo },
+    }
+    for i = 2, #segs do
+        local s = segs[i]
+        ev(s.tr and s.tr[2] or s.at, function()
+            si = i
+            if s.tr then Transitions.start(s.tr[1], "fwd", s.at - s.tr[2]) end
+        end)
+    end
+
+    -- intro: a tick for every second character typed, a knock for "Not quite."
+    for i = 1, #TERM do
+        local ln = TERM[i]
+        if not ln.instant then
+            for c = 2, #ln.text, 2 do sfx(ln.at + c - 1, "text") end
+        end
+    end
+    ev(TERM[4].at, function() introShake:add(1); Chiptune.sfx("hit") end)
+
+    -- the slam on bar 4's downbeat
+    local HEAVY = { n = 44, speed = { 2, 9 }, life = { 14, 30 }, size = { 2, 4 },
+                    style = Particles.SHRINK, drag = 0.06 }
+    ev(F(4, 0), function()
+        Chiptune.sfx("explosion")
+        slamShake:add(1)
+        psW:emit(200, 110, HEAVY)
+        psW:emit(200, 110, HEAVY, 30)
+    end)
+
+    -- bars 8-9: the cursor jumps, no animation, no sound
+    local JUMPS = { 1, 2, 3, 4, 1, 3, 2, 4 }
+    for k = 0, 7 do
+        ev(F(8, k), function() staticSel = JUMPS[k + 1] end)
+    end
+
+    -- bars 10-11: stagger, fill + spring on each beat, a wrap bump, a confirm
+    ev(F(10, 0), function() menu:enter(2) end)
+    ev(F(10, 1), function() menu:select(2); Chiptune.sfx("cursor") end)
+    ev(F(10, 2), function() menu:select(3); Chiptune.sfx("cursor") end)
+    ev(F(10, 3), function() menu:select(4); Chiptune.sfx("cursor") end)
+    ev(F(11, 0), function() menu:move(1); Chiptune.sfx("cursor") end)     -- wraps to Play
+    ev(F(11, 1), function() menu:select(2); Chiptune.sfx("cursor") end)
+    ev(F(11, 2), function() menu:confirm(); Chiptune.sfx("select") end)
+
+    -- bars 18-19: a soft tick as each line lands
+    sfx(F(18, 0), "cursor"); sfx(F(18, 2), "cursor"); sfx(F(19, 0), "cursor"); sfx(F(19, 2), "cursor")
+
+    -- bars 20-21: more trauma on every beat
+    for k = 0, 6 do
+        ev(F(20, k), function()
+            cardShake:setTrauma(max(cardShake.trauma, 0.35 + 0.1 * k))
+            Chiptune.sfx("hit")
+        end)
+    end
+
+    -- bars 22-23: bursts and fountains on every beat
+    local FOUNTAIN = { n = 70, speed = { 3, 9 }, life = { 24, 48 }, size = { 2, 3 },
+                       style = Particles.SHRINK, grav = 0.22, drag = 0.01, spread = 60, dir = 270 }
+    local BLAST = { n = 60, speed = { 2, 8 }, life = { 18, 36 }, size = { 2, 4 },
+                    style = Particles.SHRINK, drag = 0.05 }
+    local XS = { 200, 70, 330, 140, 260, 90, 300 }
+    for k = 0, 6 do
+        ev(F(22, k), function()
+            local x = XS[k + 1]
+            if k % 2 == 0 then
+                psB:emit(x, 190, FOUNTAIN)
+                psB:emit(400 - x, 190, FOUNTAIN, 50)
+            else
+                psB:emit(x, 140, BLAST)
+                psB:emit(400 - x, 160, BLAST, 40)
+            end
+            Chiptune.sfx(k % 2 == 0 and "coin" or "powerup")
+        end)
+    end
+
+    -- bars 24-25: a wipe a beat, 8 frames each; the whoosh comes from the hook
+    for k = 0, 7 do
+        ev(F(24, k), function()
+            card = k + 1
+            Transitions.start(WIPES[k + 1], "fwd", 8)
+        end)
+    end
+
+    -- bar 27: everybody
+    ev(F(27, 0), function()
+        Chiptune.sfx("small_boom")
+        bangShake:add(1)
+        psW:emit(200, 120, HEAVY)
+    end)
+
+    -- bar 31: the logo
+    ev(F(31, 0), function()
+        Chiptune.sfx("win")
+        logoShake:add(0.7)
+        psB:emit(200, 88, HEAVY, 50)
+    end)
+
+    table.sort(evs, function(a, b)
+        if a.f ~= b.f then return a.f < b.f end
+        return a.n < b.n
+    end)
+end
+
+-- ─── the scene ─────────────────────────────────────────────────────────────
+
+local function decodeLevels()
+    local out, n = {}, 0
+    for _, line in ipairs(ReelLevels.data) do
+        for i = 1, #line do
+            n = n + 1
+            out[n] = tonumber(line:sub(i, i), 16)
+        end
+    end
+    return out
+end
+
+local function feed(fr)
+    local i = fr * 4
+    Backgrounds.setLevels(lv[i + 1] or 0, lv[i + 2] or 0, lv[i + 3] or 0, lv[i + 4] or 0)
+end
+
+local function fire(fr)
+    while evs[ei] and evs[ei].f <= fr do
+        evs[ei].fn()
+        ei = ei + 1
+    end
+end
+
+local function enter()
+    f, si, ei = 0, 1, 1
+    lv = lv or decodeLevels()
+    staticSel, card = 1, 1
+    menu = UI.list({ items = ITEMS, x = ROW_X, y = ROW_Y, w = ROW_W, rowH = ROW_H, visible = #ITEMS })
+    for _, s in ipairs({ introShake, slamShake, cardShake, bangShake, logoShake }) do s:stop() end
+    psW:clear(); psB:clear()
+    Backgrounds.resetLevels()
+    for _, name in ipairs({ "Terrain", "Equalizer", "Starfield" }) do Backgrounds.reset(Backgrounds.indexOf(name)) end
+    roll:seek(0)
+    if TransitionSounds then TransitionSounds.enabled = true end
+    -- Frame 0 of the song is frame 0 of the reel.
+    Chiptune.play("iron_spire", { restart = true })
+    feed(0)
+    fire(0)
+end
+
+local function leave()
+    if TransitionSounds then TransitionSounds.enabled = false end
+    Backgrounds.resetLevels()
+end
+
+local function update()
+    f = f + 1
+    feed(f)
+    fire(f)
+    introShake:update(); slamShake:update(); cardShake:update(); bangShake:update(); logoShake:update()
+    psW:update(); psB:update()
+    local s = segs[si]
+    if s.bg then Backgrounds.update(s.bg) end
+end
+
+local function draw()
+    local s = segs[si]
+    local t = f - s.at
+    if t < 0 then t = 0 end
+    s.draw(t, f)
+end
+
+-- opts: bold, title, mono (fonts), back() (leave the reel).
+function Reel.scene(opts)
+    B, T, MONO, back = opts.bold, opts.title, opts.mono, opts.back
+    Shake.load(); Particles.load()
+    introShake = Shake.new("bump")
+    slamShake = Shake.new("quake")
+    cardShake = Shake.new({ amplitude = 12, decay = 0.03, frequency = 0.5, power = 2, seed = 3 })
+    bangShake = Shake.new("quake")
+    logoShake = Shake.new("bump")
+    psW = Particles.new(300, { seed = 11, color = "white" })
+    psB = Particles.new(400, { seed = 5 })
+    bgTerrain, bgEq = Backgrounds.indexOf("Terrain"), Backgrounds.indexOf("Equalizer")
+    bgStars = Backgrounds.indexOf("Starfield")
+    S1, S2 = fit("THE SECOND", T, 360, 3), fit("90%", T, 300, 5)
+    S3 = fit(POLISH, T, 360, 3)
+    build()
+    for _, s in ipairs(segs) do if s.bg then s.bg = Backgrounds.indexOf(s.bg) end end
+    roll = Credits.new({
+        { title = "playdate-juice", sub = "game feel for Playdate" },
+        { role = "Transitions", name = "23 wipes" },
+        { role = "Chiptune", name = "a tracker driver" },
+        { role = "Tween", name = "31 easings" },
+        { role = "Shake", name = "trauma" },
+        { role = "Particles", name = "pooled, 1-bit" },
+        { role = "Backgrounds", name = "18 loops" },
+        { role = "Credits", name = "this roll" },
+        { role = "UI", name = "animated menus", hold = true },
+    }, {
+        invert = true,
+        controls = false,
+        fit = F(31, 0) - F(28, 0) + ROLL_LEAD,
+        fonts = { title = T, sub = B, heading = T, role = B, name = B, text = B },
+        titleScale = 2,
+        background = false,      -- drawCredits paints the stars, then clips the roll
+    })
+    return {
+        ownLevels = true,        -- the reel feeds Backgrounds.setLevels itself
+        enter = enter, leave = leave, update = update, draw = draw,
+        input = function()
+            if pd.buttonJustPressed(pd.kButtonB) then back() end
+        end,
+    }
+end
+
+return Reel
