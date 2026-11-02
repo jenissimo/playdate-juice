@@ -116,6 +116,11 @@ local function signature(st)
             for k = 1, #bolt do acc = acc + bolt[k] * k * b end
         end
     end
+    -- Music-driven derived state (Terrain's column gains, the Equalizer's bars).
+    for _, key in ipairs({"gain", "bar"}) do
+        local t = st[key]
+        if t then for i = 1, #t do acc = acc + t[i] * (i + 5) end end
+    end
     return acc
 end
 
@@ -239,5 +244,181 @@ B.update(B.count + 1)
 B.update(nil)
 A.eq(B.reset(B.count + 1), nil, "reset past the end returns nil")
 A.truthy(B.reset(1, 7), "reset with a seed returns the fresh state")
+
+-- ----------------------------------------------------------- music input ---
+
+local au = B.audio
+A.eq(au.energy, 0, "nothing fed: no energy")
+A.eq(au.beat, 0, "nothing fed: no beat")
+
+-- With no levels, or an all-zero feed, every background must be the one it
+-- always was. Unfed vs zero-fed catches any reactive term that is not exactly
+-- neutral at zero (a stray +0.5, a gain that is 1.0000001).
+for i = 1, B.count do
+    B.resetLevels()
+    local plain = B.reset(i, SEED)
+    for _ = 1, 150 do B.update(i) end
+    local want = signature(plain)
+    local wantGain = plain.gain and plain.gain[10]
+
+    B.resetLevels()
+    local fed = B.reset(i, SEED)
+    for _ = 1, 150 do B.setLevels(0, 0, 0, 0); B.update(i) end
+    A.eq(signature(fed), want, B.names[i] .. ": zero levels == no levels")
+    A.eq(fed.gain and fed.gain[10], wantGain, B.names[i] .. ": zero levels leave gains neutral")
+end
+
+-- Smoothing: fast attack, slower decay, and an exact return to silence.
+B.resetLevels()
+B.setLevels(15, 0, 0, 0)
+A.near(au.env[1], 0.6, 1e-9, "attack closes 60% of the gap in a frame")
+B.setLevels(15, 0, 0, 0)
+A.near(au.env[1], 0.84, 1e-9, "attack keeps closing")
+A.near(au.energy, 0.84, 1e-9, "energy is the loudest smoothed channel")
+B.setLevels(0, 0, 0, 0)
+A.near(au.env[1], 0.84 * 0.88, 1e-9, "decay is slower than attack")
+local prevEnv, mono = au.env[1], true
+local frames = 0
+while au.env[1] > 0 and frames < 200 do
+    B.setLevels(0, 0, 0, 0)
+    if au.env[1] > prevEnv then mono = false end
+    prevEnv = au.env[1]
+    frames = frames + 1
+end
+A.truthy(mono, "decay never rises")
+A.eq(au.env[1], 0, "the tail snaps to exactly zero")
+A.truthy(frames < 60, "and does so in a bounded time")
+
+-- Input shapes: values, array, range clamping, channel cap.
+B.resetLevels()
+B.setLevels(15, 7.5, 0)
+local a1, a2 = au.raw[1], au.raw[2]
+B.resetLevels()
+B.setLevels({15, 7.5, 0})
+A.eq(au.raw[1], a1, "array form == value form (ch 1)")
+A.eq(au.raw[2], a2, "array form == value form (ch 2)")
+A.eq(au.n, 3, "n counts the channels fed")
+A.eq(a1, 1, "15 is full scale")
+A.eq(a2, 0.5, "7.5 is half scale")
+B.setLevels(99, -4, "x", nil, 3)
+A.eq(au.raw[1], 1, "over-range clamps to 1")
+A.eq(au.raw[2], 0, "negative clamps to 0")
+A.eq(au.raw[3], 0, "non-numbers read as 0")
+B.setLevels(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+A.eq(au.n, 8, "more than 8 channels are ignored")
+B.setLevels()
+A.eq(au.n, 0, "an empty feed means silence")
+
+-- Onsets: a sudden rise is a hit, a held note is not, and hits have a refractory gap.
+B.resetLevels()
+B.setLevels(0, 0, 0, 0)
+A.falsy(au.onset, "silence is not a hit")
+B.setLevels(0, 0, 0, 15)
+A.truthy(au.onset, "a jump from silence is a hit")
+A.eq(au.beat, 1, "a hit sets the beat to 1")
+B.setLevels(0, 0, 0, 15)
+A.falsy(au.onset, "a held note is not another hit")
+A.near(au.beat, 0.82, 1e-9, "the beat decays")
+B.setLevels(0, 0, 0, 0)
+B.setLevels(0, 0, 0, 15)
+A.falsy(au.onset, "a rise inside the refractory gap is ignored")
+for _ = 1, 10 do B.setLevels(0, 0, 0, 0) end
+B.setLevels(0, 0, 0, 15)
+A.truthy(au.onset, "the next hit registers once the gap is over")
+for _ = 1, 60 do B.setLevels(0, 0, 0, 15) end
+A.eq(au.beat, 0, "the beat dies out to exactly zero")
+B.resetLevels()
+B.setLevels(0, 0, 0, 2)
+A.falsy(au.onset, "a small rise is not a hit")
+
+-- Reactive backgrounds really react, and deterministically.
+local function loud(i, steps)
+    B.resetLevels()
+    local st = B.reset(i, SEED)
+    for n = 1, steps do
+        B.setLevels(15, (n * 5) % 16, 15 - (n * 3) % 16, (n * 7) % 16)
+        B.update(i)
+    end
+    return st
+end
+for _, n in ipairs({"Starfield", "Radar", "Plasma", "Dither Hills", "Terrain", "Equalizer"}) do
+    local i = B.indexOf(n)
+    A.truthy(i, n .. " exists")
+    B.resetLevels()
+    local quiet = signature(run(i, SEED, 120))
+    local a = signature(loud(i, 120))
+    local b = signature(loud(i, 120))
+    A.eq(a, b, n .. " reacts the same way every time")
+    A.truthy(a ~= quiet, n .. " changes with the music")
+end
+B.resetLevels()
+A.truthy(B.isReactive(B.indexOf("Terrain")), "Terrain is flagged reactive")
+A.falsy(B.isReactive(B.indexOf("Waves")), "Waves is not")
+A.falsy(B.isReactive(99), "unknown index is not")
+
+-- Terrain: a loud left channel raises the left of the ridge line, not the right.
+B.resetLevels()
+local ter = B.reset(B.indexOf("Terrain"), SEED)
+for _ = 1, 30 do B.setLevels(15, 0, 0, 0); B.update(B.indexOf("Terrain")) end
+A.truthy(ter.gain[1] > 1.9, "terrain: loud channel 1 lifts the left column")
+A.near(ter.gain[31], 1, 1e-9, "terrain: silent channel 4 leaves the right column alone")
+A.truthy(ter.gain[1] > ter.gain[16], "terrain: gain falls off across the spectrum")
+
+-- Equalizer: bars follow the envelope, stay in range, and the peak holds then falls.
+B.resetLevels()
+local eqI = B.indexOf("Equalizer")
+local eq = B.reset(eqI, SEED)
+for _ = 1, 10 do B.setLevels(15, 15, 15, 15); B.update(eqI) end
+local eqOk = true
+for c = 1, #eq.bar do
+    if eq.bar[c] < 0 or eq.bar[c] > 1 or eq.peak[c] < eq.bar[c] then eqOk = false end
+end
+A.truthy(eqOk, "equalizer bars in 0..1 with the peak at or above")
+A.truthy(eq.bar[8] > 0.5, "equalizer bars rise with a loud feed")
+local top = eq.peak[8]
+for _ = 1, 8 do B.setLevels(0, 0, 0, 0); B.update(eqI) end
+A.eq(eq.peak[8], top, "the peak holds for a few frames")
+for _ = 1, 80 do B.setLevels(0, 0, 0, 0); B.update(eqI) end
+A.eq(eq.peak[8], 0, "then falls to the floor")
+A.eq(eq.bar[8], 0, "and the bar is empty")
+
+-- Lightning strikes on a musical hit, but not inside the flash of the last one.
+B.resetLevels()
+local lI = B.indexOf("Lightning")
+local lt = B.reset(lI, SEED)
+local bolts0 = lt.bolts
+for _ = 1, 10 do B.update(lI) end
+A.eq(lt.bolts, bolts0, "no music, no early strike")
+A.eq(lt.p[1], 10, "the timer is at frame 10")
+B.setLevels(0, 0, 0, 15)
+B.update(lI)
+A.eq(lt.p[1], 0, "a hit restarts the strike age")
+A.truthy(lt.bolts ~= bolts0, "and builds a new bolt")
+for _ = 1, 8 do B.setLevels(0, 0, 0, 0) end
+local bolts1 = lt.bolts
+B.setLevels(0, 0, 0, 15)
+B.update(lI)
+A.eq(lt.bolts, bolts1, "a hit during the flash does not re-strike")
+A.eq(lt.p[1], 1, "the age keeps counting")
+
+-- Loop-forever survives a driven session: phases stay in period, items on screen.
+for i = 1, B.count do
+    if B.names[i] ~= "Life" then
+        B.resetLevels()
+        local st = B.reset(i, SEED)
+        local ok, why = true, "ok"
+        for n = 1, 12000 do
+            B.setLevels(15, (n * 5) % 16, 15 - (n * 3) % 16, (n * 7) % 16, n % 16, 15, 0, (n * 11) % 16)
+            B.update(i)
+            if n % 1500 == 0 then
+                local a, msg = accsOk(st)
+                if not a then ok, why = false, msg end
+                if not boundsOk(st, B.margin(i)) then ok, why = false, "left the screen" end
+            end
+        end
+        A.truthy(ok, B.names[i] .. " still loops cleanly under music (" .. why .. ")")
+    end
+end
+B.resetLevels()
 
 return true

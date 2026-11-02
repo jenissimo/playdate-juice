@@ -28,6 +28,19 @@ API (unchanged from the demo-era module):
     Backgrounds.names / .count / .getName(i) / .indexOf(name)
     Backgrounds.load{seed=, preload=}   optional; draw() calls it for you
     Backgrounds.reset(index[, seed])    rebuild one background's state
+
+Music-reactive extension (still no dependency on any other module):
+    Backgrounds.setLevels(...)    feed this frame's channel levels, 0..15 each,
+                                  as values or as one array: the exact shape of
+                                  `Backgrounds.setLevels(Chiptune.levels())`
+    Backgrounds.resetLevels()     silence, with no decay tail
+    Backgrounds.audio             read-only readouts: n, env[i], energy, beat
+
+The module only ever sees numbers. The audio state is smoothed (fast attack,
+slow decay) so shapes pulse instead of jittering, and a flux detector turns a
+sudden rise in any channel into a `beat`. With nothing fed, every value is
+exactly 0 and every reactive term below multiplies or adds that zero, so a
+background is bit-for-bit what it was before this existed.
 ]]
 
 Backgrounds = Backgrounds or {}
@@ -136,6 +149,98 @@ local function advance(st)
     end
 end
 
+-- Push an accumulator forward by an extra `amt` (< its period). This is how
+-- the music speeds a loop up while the phase still wraps on its exact period;
+-- amt == 0 leaves the phase untouched to the last bit.
+local function bump(st, i, amt)
+    local v = st.p[i] + amt
+    local per = st.per[i]
+    if v >= per then v = v - per end
+    st.p[i] = v
+end
+
+-- ===========================================================================
+-- pure: music input
+-- ===========================================================================
+
+-- Chiptune.levels() yields 0..15 per channel (4 for a Game Boy song, up to 8
+-- for a format-2 one) as multiple return values, so setLevels takes varargs;
+-- an array works too. Smoothing lives here, once per fed frame, rather than in
+-- every background: they all see the same envelope, and it stays deterministic
+-- because it only moves when the host calls setLevels.
+local MAXCH <const> = 8
+local LEVEL_MAX <const> = 15
+local ATTACK <const> = 0.6       -- fraction of the gap closed per frame going up
+local DECAY <const> = 0.12       -- ... and going down: the pulse tail
+local ONSET_FLUX <const> = 0.4   -- summed 0..1 rise across channels that counts as a hit
+local ONSET_GAP <const> = 6      -- frames before another hit can register
+local BEAT_DECAY <const> = 0.82
+
+local audio = Backgrounds.audio
+if not audio then
+    audio = { n = 0, energy = 0, beat = 0, onset = false, gap = 0,
+              raw = {}, prev = {}, env = {} }
+    for i = 1, MAXCH do audio.raw[i], audio.prev[i], audio.env[i] = 0, 0, 0 end
+    Backgrounds.audio = audio
+end
+
+function Backgrounds.setLevels(...)
+    local first = ...
+    local tbl = type(first) == "table" and first or nil
+    local n = tbl and #tbl or select("#", ...)
+    if n > MAXCH then n = MAXCH end
+    local raw, prev, env = audio.raw, audio.prev, audio.env
+    local flux, top = 0, 0
+    for i = 1, MAXCH do
+        local v
+        if i <= n then
+            if tbl then v = tbl[i] else v = (select(i, ...)) end
+        end
+        if type(v) ~= "number" then v = 0 end
+        v = v / LEVEL_MAX
+        if v < 0 then v = 0 elseif v > 1 then v = 1 end
+        local old = raw[i]
+        prev[i], raw[i] = old, v
+        if v > old then flux = flux + (v - old) end
+        local e = env[i]
+        e = e + (v - e) * (v > e and ATTACK or DECAY)
+        -- Snap the tail to zero: an exponential never gets there, and "music
+        -- stopped" must return a background to its exact silent look.
+        if e < 0.004 then e = 0 end
+        env[i] = e
+        if e > top then top = e end
+    end
+    audio.n = n
+    audio.energy = top
+    if audio.gap > 0 then audio.gap = audio.gap - 1 end
+    audio.onset = false
+    if flux >= ONSET_FLUX and audio.gap == 0 then
+        audio.onset = true
+        audio.beat = 1
+        audio.gap = ONSET_GAP
+    else
+        local b = audio.beat * BEAT_DECAY
+        audio.beat = b < 0.02 and 0 or b
+    end
+end
+
+function Backgrounds.resetLevels()
+    for i = 1, MAXCH do audio.raw[i], audio.prev[i], audio.env[i] = 0, 0, 0 end
+    audio.n, audio.energy, audio.beat, audio.gap, audio.onset = 0, 0, 0, 0, false
+end
+
+-- Envelope at position f (0..1) across the n fed channels, linearly
+-- interpolated, so a 4-channel song can still drive a 31-column ridge line.
+local function band(env, n, f)
+    if n <= 0 then return 0 end
+    if n == 1 then return env[1] end
+    local x = f * (n - 1)
+    local i = floor(x)
+    if i >= n - 1 then return env[n] end
+    local t = x - i
+    return env[i + 1] * (1 - t) + env[i + 2] * t
+end
+
 -- ===========================================================================
 -- device helpers (only reached when the SDK is present)
 -- ===========================================================================
@@ -160,7 +265,7 @@ local specs = {}
 
 -- 1 -----------------------------------------------------------------------
 specs[1] = {
-    name = "Starfield", margin = 4,
+    name = "Starfield", margin = 4, reactive = true,
     init = function(st, rng)
         for i = 1, 80 do
             st.items[i] = {
@@ -173,9 +278,11 @@ specs[1] = {
     step = function(st)
         local rng = st.rng
         local items = st.items
+        -- Music: flight speed follows the loudest channel, plus a lurch on a hit.
+        local k = 1 + audio.energy * 1.5 + audio.beat
         for i = 1, #items do
             local s = items[i]
-            s.x = s.x - s.spd
+            s.x = s.x - s.spd * k
             -- Recycling at the edge *is* the loop: x is bounded by construction,
             -- so no accumulator is needed here.
             if s.x < -2 then s.x = W + 2; s.y = rng.range(0, H) end
@@ -187,7 +294,8 @@ specs[1] = {
         local items = st.items
         for i = 1, #items do
             local s = items[i]
-            gfx.fillRect(floor(s.x), floor(s.y), s.sz, s.sz)
+            local z = s.sz + (audio.beat > 0.5 and 1 or 0)   -- stars flare on a hit
+            gfx.fillRect(floor(s.x), floor(s.y), z, z)
         end
     end,
 }
@@ -219,10 +327,14 @@ specs[2] = {
 local RADAR_R <const> = 160
 
 specs[3] = {
-    name = "Radar", margin = 0,
+    name = "Radar", margin = 0, reactive = true,
     init = function(st)
         addAcc(st, 0, 1.0, RADAR_R + 30)  -- ring travel; period is the ring spacing
         addAcc(st, 0, 2.5, 360)           -- sweep angle, degrees
+    end,
+    react = function(st, a)
+        bump(st, 1, a.beat * 3 + a.energy * 1.5)   -- rings surge outward on a hit
+        bump(st, 2, a.energy * 2)                  -- the sweep speeds up with level
     end,
     render = function(st)
         gfx.clear(gfx.kColorBlack)
@@ -237,7 +349,7 @@ specs[3] = {
         gfx.setLineWidth(2)
         gfx.drawLine(cx, cy, cx + cos(a) * RADAR_R, cy + sin(a) * RADAR_R)
         gfx.setLineWidth(1)
-        gfx.fillCircleAtPoint(cx, cy, 3)
+        gfx.fillCircleAtPoint(cx, cy, 3 + floor(audio.beat * 6))
     end,
 }
 
@@ -413,18 +525,23 @@ local HILLS <const> = {
 }
 
 specs[8] = {
-    name = "Dither Hills", margin = 0,
+    name = "Dither Hills", margin = 0, reactive = true,
     init = function(st)
         for i = 1, #HILLS do
             -- ph is used as both ph and ph*1.7, so 10*TAU (10 and 17 turns).
             addAcc(st, 0, HILLS[i].spd, TAU * 10)
         end
     end,
+    react = function(st, a)
+        -- Layer i listens to channel i: four hills, four Game Boy channels.
+        for i = 1, #HILLS do bump(st, i, HILLS[i].spd * a.env[i]) end
+    end,
     render = function(st)
         gfx.clear(gfx.kColorWhite)
         for i = 1, #HILLS do
             local l = HILLS[i]
             local ph = st.p[i]
+            local amp = l.amp * (1 + 0.9 * audio.env[i])
             -- A fully opaque layer draws as solid black; asking the dither for
             -- 1.0 would give the same picture more slowly.
             if l.dither >= 0.95 then
@@ -433,8 +550,8 @@ specs[8] = {
                 dither(l.dither, true)
             end
             for x = 0, W - 1, 3 do
-                local y = l.yBase + sin(x * l.freq + ph) * l.amp
-                        + sin(x * l.freq * 2.5 + ph * 1.7) * l.amp * 0.25
+                local y = l.yBase + sin(x * l.freq + ph) * amp
+                        + sin(x * l.freq * 2.5 + ph * 1.7) * amp * 0.25
                 gfx.fillRect(x, floor(y), 3, H - floor(y))
             end
         end
@@ -489,10 +606,14 @@ specs[9] = {
 
 -- 10 ----------------------------------------------------------------------
 specs[10] = {
-    name = "Plasma", margin = 0,
+    name = "Plasma", margin = 0, reactive = true,
     init = function(st)
         addAcc(st, 0, 0.03, TAU * 5)  -- used as t1 and t1*0.8 -> 5 and 4 turns
         addAcc(st, 0, 0.025, TAU)
+    end,
+    react = function(st, a)
+        bump(st, 1, 0.045 * a.energy)
+        bump(st, 2, 0.04 * a.energy)
     end,
     render = function(st)
         gfx.clear(gfx.kColorWhite)
@@ -648,7 +769,7 @@ local function strike(st, rng)
 end
 
 specs[14] = {
-    name = "Lightning", margin = 96,
+    name = "Lightning", margin = 96, reactive = true,
     init = function(st, rng)
         -- Age in frames. It wraps to exactly 0 (integer rate, integer period)
         -- and that instant is the next strike -- no free-running timer to
@@ -657,7 +778,14 @@ specs[14] = {
         strike(st, rng)
     end,
     step = function(st)
-        if st.p[1] == 0 then strike(st, st.rng) end
+        if st.p[1] == 0 then
+            strike(st, st.rng)
+        elseif audio.onset and st.p[1] >= 8 then
+            -- A musical hit strikes now. Age 0 is exactly what the timer's own
+            -- wrap produces, and the 8-frame floor lets the last flash read.
+            st.p[1] = 0
+            strike(st, st.rng)
+        end
     end,
     render = function(st)
         gfx.clear(gfx.kColorBlack)
@@ -808,9 +936,22 @@ specs[16] = {
 
 -- 17 ----------------------------------------------------------------------
 specs[17] = {
-    name = "Terrain", margin = 0,
+    name = "Terrain", margin = 0, reactive = true,
     init = function(st)
         addAcc(st, 0, 0.06, TAU * 10)  -- used as scroll and scroll*1.3
+        st.gain = {}
+        for c = 1, 31 do st.gain[c] = 1 end
+    end,
+    react = function(st, a)
+        bump(st, 1, 0.06 * a.energy)
+    end,
+    step = function(st)
+        -- Ridge height per column: the channels spread left to right like a
+        -- spectrum, and the mesh scrolls underneath so the peaks travel.
+        local g, env, n, beat = st.gain, audio.env, audio.n, audio.beat
+        for c = 0, 30 do
+            g[c + 1] = 1 + 1.1 * band(env, n, c / 30) + 0.4 * beat
+        end
     end,
     render = function(st)
         gfx.clear(gfx.kColorBlack)
@@ -824,12 +965,66 @@ specs[17] = {
             for c = 0, 30 do
                 local xn = (c / 30 - 0.5) * W * 1.5 * scale + W / 2
                 local h = (sin(c * 0.16 + r * 0.5 + scroll) * 20
-                         + sin(c * 0.32 + scroll * 1.3) * 10) * (0.3 + depth * 0.7)
+                         + sin(c * 0.32 + scroll * 1.3) * 10) * (0.3 + depth * 0.7) * st.gain[c + 1]
                 local yn = baseY - h
                 if prevX then gfx.drawLine(floor(prevX), floor(prevY), floor(xn), floor(yn)) end
                 prevX, prevY = xn, yn
             end
         end
+    end,
+}
+
+-- 18 ----------------------------------------------------------------------
+-- Equalizer: the one background that is about the music rather than reacting
+-- to it. With nothing playing it idles as a row of floor stubs and a scanning
+-- dot, so it is never blank.
+local EQ_COLS <const> = 16
+local EQ_SEGS <const> = 24
+local EQ_BASE <const> = H - 12
+
+specs[18] = {
+    name = "Equalizer", margin = 0, reactive = true,
+    init = function(st)
+        st.idle = addAcc(st, 0, 0.06, TAU)
+        st.bar, st.peak, st.hold = {}, {}, {}
+        for c = 1, EQ_COLS do st.bar[c], st.peak[c], st.hold[c] = 0, 0, 0 end
+    end,
+    step = function(st)
+        local env, n, ph = audio.env, audio.n, st.p[st.idle]
+        local bar, peak, hold = st.bar, st.peak, st.hold
+        for c = 1, EQ_COLS do
+            -- 16 columns from 4-8 channels: interpolate, then ripple a little
+            -- so neighbours between two channels are not a flat plateau.
+            local v = band(env, n, (c - 1) / (EQ_COLS - 1)) * (0.8 + 0.2 * sin(ph + c * 1.7))
+            bar[c] = v
+            if v >= peak[c] then
+                peak[c], hold[c] = v, 10
+            elseif hold[c] > 0 then
+                hold[c] = hold[c] - 1
+            else
+                local pk = peak[c] - 0.02
+                peak[c] = pk > v and pk or v
+            end
+        end
+    end,
+    render = function(st)
+        gfx.clear(gfx.kColorBlack)
+        gfx.setColor(gfx.kColorWhite)
+        local bar, peak = st.bar, st.peak
+        local hot = floor(EQ_SEGS * 0.75)
+        for c = 1, EQ_COLS do
+            local x = (c - 1) * 25 + 2
+            local lit = floor(bar[c] * EQ_SEGS)
+            for s = 0, lit - 1 do
+                if s >= hot then dither(0.5, false) else gfx.setColor(gfx.kColorWhite) end
+                gfx.fillRect(x, EQ_BASE - (s + 1) * 8 + 2, 21, 6)
+            end
+            gfx.setColor(gfx.kColorWhite)
+            local ps = floor(peak[c] * EQ_SEGS)
+            if ps > lit then gfx.fillRect(x, EQ_BASE - ps * 8 + 2, 21, 2) end
+            gfx.fillRect(x, EQ_BASE + 2, 21, 2)
+        end
+        gfx.fillRect(floor(st.p[st.idle] / TAU * W), EQ_BASE + 6, 6, 2)
     end,
 }
 
@@ -869,6 +1064,12 @@ function Backgrounds.indexOf(name)
         if specs[i].name == name then return i end
     end
     return nil
+end
+
+-- True for the backgrounds that respond to setLevels(), so a menu can say so.
+function Backgrounds.isReactive(index)
+    local sp = specs[index]
+    return sp ~= nil and sp.reactive == true
 end
 
 function Backgrounds.margin(index)
@@ -929,7 +1130,9 @@ function Backgrounds.update(index)
     if not sp then return end
     local st = Backgrounds.state(index)
     advance(st)
+    if sp.react then sp.react(st, audio) end
     if sp.step then sp.step(st) end
+    audio.onset = false   -- a hit is acted on once, by the frame that sees it
 end
 
 function Backgrounds.draw(index)
