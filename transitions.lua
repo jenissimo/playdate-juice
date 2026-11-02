@@ -46,8 +46,7 @@
 -- file being absent costs you the stamps, not the transition: the walk still
 -- wipes, just unstamped, and no other effect reads a file at all.
 --
--- Ported and merged from github.com/jenissimo/playdate-transitions (MIT); the
--- Paw Walk and Blink effects come from a shipping game.
+-- Grown out of github.com/jenissimo/playdate-transitions (MIT).
 Transitions = Transitions or {}
 Transitions.FREEZES_INCOMING = true
 -- True as of this release: Transitions.draw/wrap accepts an (updateFn, drawFn)
@@ -946,9 +945,8 @@ end
 --
 -- SPLIT (two functions): `updateFn` runs on EVERY frame of the wipe, active
 -- or not, so the destination scene's timers/tweens/toasts keep advancing and
--- it can keep reading input -- gated however the host wants (see the host game's
--- main.lua for why that gate now guards the INCOMING scene rather than the
--- outgoing one, which cannot run again regardless once a scene swap has
+-- it can keep reading input, gated however the host wants (guard the
+-- INCOMING scene: the outgoing one cannot run again once the swap has
 -- happened). `drawFn` is still captured only ONCE per transition, on the
 -- frame it starts: the offscreen render plus two full-screen blits is the
 -- expensive half, not the logic, so freezing draw alone keeps the frame-
@@ -1011,8 +1009,7 @@ end
 function Transitions.setFrames(n) frames = n end
 function Transitions.getFrames() return frames or 24 end
 
--- Downstream spellings kept alive on purpose: A shipping game used this driver as
--- for_hop/wrap and there is no reason to break its call sites over a style.
+-- Older names, kept as aliases.
 Transitions.for_hop = Transitions.forHop
 Transitions.wrap = Transitions.draw
 

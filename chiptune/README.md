@@ -322,15 +322,15 @@ clicking.
 ### Format 4 banks
 
 ```python
-from gbm_compose import Song, studio_bank
+from gbm_compose import Song, sample_bank
 from gbm_format import encode_song
 s = Song('Band', version=4, voices=2, groove=(6, 7))
-studio_bank(s, 'my_samples', rate=16384, only=['gtr_lead', 'kick'], out='band.gbank')
+sample_bank(s, 'my_samples', rate=16384, only=['gtr_lead', 'kick'], out='band.gbank')
 s.bar(['A4@gtr_lead . E5+318 . . . -', 'C5@kick . . . C5 . . .'])
 open('band.gbm', 'wb').write(encode_song(s.project()))
 ```
 
-`studio_bank` reads a folder of PCM16 mono WAVs plus a `bank.json` (name,
+`sample_bank` reads a folder of PCM16 mono WAVs plus a `bank.json` (name,
 file, rate, root, loop per sample), resamples with ffmpeg and quantises to
 8 bits with dither. Songs sharing a bank must use the same selection and rate.
 `python tools/chiptune.py bank DIR out.gbank --rate 16384` builds just the

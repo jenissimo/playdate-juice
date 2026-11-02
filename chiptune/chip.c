@@ -94,8 +94,8 @@ int chip_render(Chip *c, int16_t *left, int16_t *right, int n)
     int q;
     int32_t tick_cd, timer_cd, music_cd;
     chip_drain(c);
-    /* Calibrated studio arrangements keep ticks to the sample; embedded FT2
-       and chip songs retain the master's bounded-lateness optimization. */
+    /* Format 4 ticks to the sample; the other formats let a tick land up
+       to CHIP_TICK_LATE_US late, on a block boundary. */
     q = g->banks[0].version == 4 ? 1 : c->quantum;
     if (quiet(c)) {
         c->idle = 1;

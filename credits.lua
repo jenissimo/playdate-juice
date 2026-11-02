@@ -44,7 +44,7 @@
 --   roll.t, roll.duration, roll.speed, roll.rate, roll:progress(), roll:scroll()
 --
 -- A script is a list of entries (a bare string is { text = s }):
---   { title = "MY GAME", sub = "a cat puzzle" }  pixel-doubled unless fonts.title
+--   { title = "MY GAME", sub = "a cat puzzle" }   pixel-doubled unless fonts.title
 --   { heading = "Music" }                         centred, with side rules
 --   { role = "Composer", name = "Ann" }           or names = { "Ann", "Bo" }
 --   { name = "Ann" }                              one centred name

@@ -38,8 +38,8 @@ def run_simulator():
     exe = os.path.join(sdk, "bin", "PlaydateSimulator.exe" if os.name == "nt" else "PlaydateSimulator")
     if not os.path.isfile(exe):
         sys.exit("simulator not found: " + exe)
-    shutil.rmtree(FRAMES, ignore_errors=True)
-    os.makedirs(FRAMES)
+    shutil.rmtree(FRAMES, ignore_errors=True)   # a file the simulator still holds can stay
+    os.makedirs(FRAMES, exist_ok=True)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_demo.py"), "--record", FRAMES], check=True)
     log = os.path.join(FRAMES, "sim.log")
     with open(log, "w", encoding="utf-8") as f:

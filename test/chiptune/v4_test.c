@@ -133,7 +133,7 @@ static void driver_tests(const char *song_path, const char *bank_path, const cha
     chip_render(&c, L, R, 1024);
     CHECK(c.vox.v[0].smp_bits == 4 && c.gbm.owner[0] != 255, "legacy sampled SFX can borrow a PCM8 voice");
     for (i = 0; i < 30; i++) chip_render(&c, L, R, 1024);
-    CHECK(c.gbm.owner[0] == 255 && c.vox.v[0].smp_bits == 8 && c.vox.v[0].on, "SFX release restores the studio sample and its loop");
+    CHECK(c.gbm.owner[0] == 255 && c.vox.v[0].smp_bits == 8 && c.vox.v[0].on, "SFX release restores the bank sample and its loop");
     chip_post_bank(&c, CHIP_SFX_BANK, 0, 0, song, bank);
     chip_post(&c, CHIP_SFX, 0, 0, NULL);
     chip_render(&c, L, R, 1024);
@@ -171,10 +171,10 @@ static void packed_tests(const char *raw_path, const char *packed_path, const ch
 
 /* Both sampler layouts may share one driver and lend voices to each other.
    Their header bytes and instrument byte 13 have different meanings. */
-static void compatibility_tests(const char *ft2_path, const char *studio_path, const char *bank_path)
+static void compatibility_tests(const char *ft2_path, const char *bank_song_path, const char *bank_path)
 {
     uint32_t fn, sn, bn;
-    uint8_t *ft2 = read_file(ft2_path, &fn), *studio = read_file(studio_path, &sn), *bank = read_file(bank_path, &bn);
+    uint8_t *ft2 = read_file(ft2_path, &fn), *studio = read_file(bank_song_path, &sn), *bank = read_file(bank_path, &bn);
     Chip c;
     int i;
     uint32_t sfxdir = (uint32_t)ft2[20] | ((uint32_t)ft2[21] << 8);
@@ -188,13 +188,13 @@ static void compatibility_tests(const char *ft2_path, const char *studio_path, c
     chip_post(&c, CHIP_PLAY, 0, 0, ft2);
     chip_render(&c, L, R, 256);
     CHECK(c.vox.v[0].osc == OSC_PCM && c.vox.output_gain == 0.0f && c.vox.v[0].mix_gain == 1.0f,
-          "switching to FT2 resets studio mastering and instrument gain");
-    for (i = 0; i < VOX_VOICES; i++) CHECK(!c.vox.tail[i].on, "switching clears studio overlap %d", i);
+          "switching to FT2 resets mastering and instrument gain");
+    for (i = 0; i < VOX_VOICES; i++) CHECK(!c.vox.tail[i].on, "switching clears release overlap %d", i);
     chip_post_bank(&c, CHIP_PLAY, 0, 0, studio, bank);
     chip_render(&c, L, R, 256);
     CHECK(c.vox.v[0].osc == OSC_SAMPLE && c.vox.v[0].smp_bits == 8 && c.vox.v[0].level == 1.0f,
           "switching back restores bank pitch and unity FT2 volume");
-    /* Move this fixture's first FT2 effect to the held studio bass voice. */
+    /* Move this fixture's first FT2 effect to the held bank bass voice. */
     ft2[sfxdir + 1] = 0;
     chip_post(&c, CHIP_SFX_BANK, 0, 0, ft2);
     chip_post(&c, CHIP_SFX, 0, 0, NULL);

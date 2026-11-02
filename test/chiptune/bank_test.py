@@ -9,7 +9,7 @@ import wave
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'tools'))
 from gbm_bank import import_bank, encode_bank, bank_hash
-from gbm_compose import Song, studio_bank
+from gbm_compose import Song, sample_bank
 from gbm_format import encode_song
 
 
@@ -46,7 +46,7 @@ class BankTests(unittest.TestCase):
             self.assertEqual(struct.unpack_from('<I', blob, 8)[0], bank_hash(blob))
             self.assertEqual(struct.unpack_from('<I', blob, 24)[0], 440000)
             s = Song('import', version=4, voices=1)
-            self.assertEqual(studio_bank(s, directory, rate=11025), blob)
+            self.assertEqual(sample_bank(s, directory, rate=11025), blob)
             s.bar(['A4@tone . . -'])
             song = encode_song(s.project())
             self.assertEqual(song[2], 4)
@@ -70,7 +70,7 @@ class BankTests(unittest.TestCase):
             encode_song(s.project())
 
     def test_sampler_layout_is_explicit(self):
-        s = Song('old development layout', version=3, voices=1)
+        s = Song('format 3 with a bank', version=3, voices=1)
         s.s['sampleBank'] = dict(count=1, hash=1)
         s.bar(['C4'])
         with self.assertRaisesRegex(ValueError, 'external sample banks need format 4'):

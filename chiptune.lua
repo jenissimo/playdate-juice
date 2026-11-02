@@ -6,7 +6,7 @@
 -- music): four channels, instruments with LSDj-style tables, arpeggios,
 -- slides, vibrato, drum samples, and two SFX slots that borrow a channel
 -- from the music and give it back. Format 2 goes to 8 SID-style voices;
--- format 3 embeds FT2 samples; format 4 adds shared studio PCM8 banks
+-- format 3 embeds FT2 samples; format 4 adds shared PCM8 sample banks
 -- (the jungle tracks are 70-95 KB). All load and play the same way here.
 --
 -- This file is the Lua face of it. It needs the C half built into the game

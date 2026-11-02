@@ -17,7 +17,7 @@
    switching it frame by frame, as SID drums do), continuous pulse width and
    PWM, triangle and saw, ring modulation, hard sync and a resonant filter;
    it plays on vox. Everything else -- rows, commands, tables, SFX, ducking
-   -- is the same machinery. Format 4 adds studio PCM8 instruments: a shared
+   -- is the same machinery. Format 4 adds PCM8 instruments: a shared
    external bank, each sample's rate and root, interpolated sustain loops,
    and semitone-based pitch that is not constrained by DMG periods. It uses
    vox's mixer and can combine samples with the format-2 oscillators.
