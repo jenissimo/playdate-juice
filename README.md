@@ -2,28 +2,29 @@
 
 Drop-in game-feel modules for [Playdate](https://play.date/): scene
 transitions, chiptune music and sound effects, streamed music, tweens, screen
-shake, particles, animated backgrounds and end credits.
+shake, particles, music-reactive backgrounds, end credits and animated menus.
 
 ![The Juice Zoo: the hub over a plasma background, a hop into Shake & Particles and back](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/hero.gif)
 
-Eight independent modules. Take one, take all of them — nothing here imports
-anything else in the repo. Seven are single Lua files; chiptune is a Lua file
-plus a C extension (`chiptune/`).
+The modules are independent. Take one or take all of them: none imports
+another. All but chiptune are single Lua files. Chiptune is a Lua file plus a
+C extension (`chiptune/`).
 
 | Module | Global | What it is |
 |---|---|---|
 | `transitions.lua` | `Transitions` | 23 direction-aware scene transitions + a scene-hop plan |
 | `jukebox.lua` | `Jukebox` | streamed music: crossfades, ducking, pause handling |
 | `chiptune.lua` + `chiptune/` | `Chiptune` | Game Boy, NES-style, 8-voice SID-style and sampled tracker music; 19 songs, 84 effects |
-| `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs — zero per-frame allocation |
+| `tween.lua` | `Tween` | 31 easings, sequences, parallel groups, springs |
 | `shake.lua` | `Shake` | trauma-based screen shake with deterministic noise |
 | `particles.lua` | `Particles` | pooled 1-bit particle system |
-| `backgrounds.lua` | `Backgrounds` | 17 looping procedural backgrounds |
+| `backgrounds.lua` | `Backgrounds` | 18 looping procedural backgrounds |
 | `credits.lua` | `Credits` | end credits: rolls, held rows and cards that dissolve, fitted to the music |
+| `ui.lua` | `UI` | animated menus: lists and grids with a springy highlight, key repeat, panels |
 
-Everything is host-testable: `lua test/run.lua` runs the whole suite with no
-SDK and no device. That is a deliberate design constraint, not a bonus — see
-[CONVENTIONS.md](CONVENTIONS.md).
+Everything except the C engine is host-testable: `lua test/run.lua` runs the
+suite with no SDK and no device. See [CONVENTIONS.md](CONVENTIONS.md).
+Reference pages and recipes for every module are in [docs/](docs/README.md).
 
 ## Install
 
@@ -40,14 +41,12 @@ import "juice/transitions"
 ```
 
 `pdc` compiles every `.lua` in your source tree, so a submodule brings its
-`test/` and `demo/` along as a few dead `.pdz` files. Harmless, and the price
-of not needing a build step.
+`test/` and `demo/` along as a few dead `.pdz` files. Harmless, and there is
+no build step to avoid.
 
 ## transitions
 
 ```lua
-import "transitions"
-
 function changeScene()
     Transitions.start("Slide", "fwd", 24)   -- name, direction, frames
     currentScene = newScene
@@ -61,32 +60,8 @@ end
 
 ![Circle, Diamond Wave, Clock Wipe, Melt, Shatter, Hexagons, Paw Walk and Spiral, each way](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/transitions.gif)
 
-23 effects: Slide, Fade, Dissolve, Circle, Diamonds, Diamond Wave, Triangles,
-Bubbles, Blinds, Clock Wipe, Wave Wipe, Interleave, Dither Bands, Spiral, Wind,
-Melt, Shatter, Scanline, Pixel Shift, Hexagons, Diagonal, Paw Walk, Blink.
-
-**Scene-hop plans.** Rather than picking an effect at each call site, declare
-what every navigation hop means — and, just as importantly, which hops stay
-bare:
-
-```lua
-Transitions.setPlan({
-    ["menu>rules"] = { "Paw Walk", "fwd",  16 },
-    ["menu>run"]   = { "Blink",    "fwd",  20 },
-}, {
-    ["loading>game"] = "the board already plays its own entry reveal",
-})
-
-Transitions.play("menu>rules")   -- unknown or bare hops are silently no-ops
-```
-
-`setPlan` validates effect names and refuses a hop listed in both tables, so a
-typo is a startup error rather than a scene change that quietly does nothing
-months later.
-
-Paw Walk needs `images/paw_print.png` and `images/paw_plate.png`; they load
-lazily on first use and degrade to an unstamped wipe if missing.
-`Transitions.setImagePath("your/folder/")` repoints them.
+Also a scene-hop plan (`Transitions.setPlan`, `Transitions.play("menu>rules")`).
+→ [docs/transitions.md](docs/transitions.md)
 
 ## jukebox
 
@@ -100,13 +75,8 @@ Jukebox.duck(0.22, 0.15); Jukebox.restore()
 ```
 
 Wire `Jukebox.pause` / `Jukebox.resume` to `playdate.gameWillPause` /
-`gameWillResume` — without the resume hook the music stays ducked for the rest
-of the session after the first pause.
-
-Handles the things that get re-derived in every project: not restarting a track
-that is already playing, not letting two crossfades race, and doing every fade
-through the fileplayer's own fade argument (which runs on the audio thread)
-rather than as a per-frame ramp on the busiest frames in the game.
+`gameWillResume`.
+→ [docs/jukebox.md](docs/jukebox.md)
 
 ## chiptune
 
@@ -118,59 +88,67 @@ Chiptune.sfx("coin")          -- the music ducks under it
 Chiptune.mute({ "wav" })      -- the song keeps time
 ```
 
-GBM, a tracker driver for the original Game Boy, ported from SM83 assembly to
-C and run inside the audio callback, so the tempo never depends on your frame
-rate. Format 1 is four Game Boy channels on an emulated DMG APU, checked write
-for write against the original ROM. Format 2 goes past the Game Boy: up to 8
-voices, an oscillator per instrument (switchable per frame from a table, for
-SID-style drums), PWM, ring mod, hard sync and a resonant filter. Format 3 is
-an FT2-style sampler with embedded samples, format 4 plays 8-bit instruments
-from a shared sample bank.
-
-It comes with 19 demo songs and an 84-effect SFX library (game sounds, plus a
-whoosh each way for every transition). `python tools/build_demo.py --jukebox`
-builds the demo straight into the music player.
+A tracker driver that runs in the audio callback, so tempo does not depend on
+your frame rate. Four song formats (Game Boy, up to 8 SID-style voices, sampled,
+sample banks), 19 demo songs and an 84-effect SFX library, including a whoosh
+each way for every transition. It needs its C half built into the game. Without
+it, `tools/chiptune.py render-all` turns the same music into ADPCM files for
+Jukebox.
 
 ![Crimson Clash on the Zoo's mixer: live channel meters, channels muted and back](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/music.gif)
 
-It needs its C half built into the game (a few lines of CMake). Without it,
-`tools/chiptune.py render-all` turns the same music into ADPCM files for
-Jukebox. Everything else: [chiptune/README.md](chiptune/README.md).
+→ [docs/chiptune.md](docs/chiptune.md), and [chiptune/README.md](chiptune/README.md) for the engine, the file format and writing songs.
 
 ## tween
 
 ```lua
 Tween.to(sprite, 30, { x = 200, y = 120 }, "outBack"):onComplete(done)
 Tween.sequence(Tween.field(o, 20, "y", 100), Tween.delay(10), Tween.call(fn))
-local spring = Tween.newSpring(0, 0.2)
+local spring = Tween.newSpring(0, 8)   -- value, smooth time in frames
 
 function playdate.update() Tween.update() end
 ```
 
 ![outBack, outBounce, outElastic, inOutCubic and inOutBack riding their curves; a spring chasing its target](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/tween.gif)
 
-The SDK already has `playdate.easingFunctions` and `playdate.timer`. This
-module exists for what they don't do: run on the host (so your animation logic
-is testable), step by frame count deterministically, sequence and group, and
-avoid allocating per frame — measured at 64 bytes for 20 tweens × 5000 updates,
-against 390 KB for the closure-per-frame equivalent. The easings are in
-normalised `f(t) -> t` form so they compose and can live in a data table.
+Steps by frame count, runs on the host, and allocates nothing per frame.
+→ [docs/tween.md](docs/tween.md)
 
-## shake, particles, backgrounds
+## shake
 
 ```lua
+Shake.load()
 local sh = Shake.new("hit")
 sh:add(0.6)
+
 function playdate.update()
     sh:update()
     Shake.apply(sh); drawWorld(); Shake.pop()
 end
+```
 
+→ [docs/shake.md](docs/shake.md)
+
+## particles
+
+```lua
+Particles.load()
 local ps = Particles.new(200)
 ps:emit(x, y, "spark", 12)
-ps:update(); ps:draw()
 
-Backgrounds.update(); Backgrounds.draw(1)
+function playdate.update()
+    ps:update(); ps:draw()
+end
+```
+
+→ [docs/particles.md](docs/particles.md)
+
+## backgrounds
+
+```lua
+function playdate.update()
+    Backgrounds.update(1); Backgrounds.draw(1)
+end
 ```
 
 <p>
@@ -178,24 +156,25 @@ Backgrounds.update(); Backgrounds.draw(1)
 <img src="https://raw.githubusercontent.com/jenissimo/playdate-juice/media/backgrounds.gif" width="49%" alt="A tour of the backgrounds: Starfield, Radar, Spirograph, Lava Lamp, Dither Hills, Plasma, Matrix Rain, Fire, Moire, Lightning, Terrain">
 </p>
 
-`Shake` is trauma-based with seeded, reproducible noise. `Particles` preallocates
-its pool and drops rather than allocating on overflow (`sys.dropped` tells you
-to size up). `Backgrounds` has 17 loops; each wraps its phase to an exact period
-so a long session never drifts.
+Feed them the music and seven of them play along:
+
+```lua
+Backgrounds.setLevels(Chiptune.levels())
+```
+
+![Terrain, Equalizer, Radar and Lightning playing to the music](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/visualizer.gif)
+
+→ [docs/backgrounds.md](docs/backgrounds.md)
 
 ## credits
 
 ```lua
 local roll = Credits.new({
-    { title = "MY GAME", sub = "a cat puzzle" },
+    { title = "MY GAME", sub = "a puzzle about cats" },
     { heading = "Code" },
     { role = "Programming", name = "Zhenya" },
     { role = "Music", names = { "gameboy-lab", "Zhenya" } },
-    { heading = "Backers" },
-    { names = { "Ann", "Bob", "Cyd", "Dee", "Eve" } },
-    { image = "images/logo", ink = true, hold = 45, on = function() Chiptune.sfx("magic") end },
     { card = "THE END", hold = 60 },
-    { card = { { heading = "Thanks for playing" } } },
 }, { fit = 30 * 95, invert = true, background = function() Backgrounds.draw(5) end })
 
 function playdate.update()
@@ -206,20 +185,30 @@ end
 
 ![The Zoo's own credits over a starfield, fast-forwarded with A to THE END](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/credits.gif)
 
-A script of titles, headings, role/name pairs (film-style split, dotted
-leaders or stacked), name grids, paragraphs, logos and dividers becomes a roll
-that stops on the rows you `hold`, handing over to centred cards that dissolve
-in and out. Headings type themselves in, names slide in, and every row dithers
-out at the screen edges with `drawFaded` — over any backdrop, not just a flat
-paper colour. `fit` solves the scroll speed so the last card lands on the
-song's last bar, and an entry's `on` cue fires as it reaches the centre: a
-jingle, a shake, a burst of particles.
+`fit` solves the scroll speed so the last card lands on the song's last bar.
+→ [docs/credits.md](docs/credits.md)
 
-What is on screen is a pure function of one frame clock, which is why the crank
-can scrub backwards (a heading un-types itself) and why the timeline is pinned
-by host tests. Text goes through `font:drawText`, so a handle like `pixel_witch`
-keeps its underscore instead of turning italic. The system font has no
-Cyrillic; pass `fonts` that do.
+## ui
+
+```lua
+local rep  = UI.repeater()
+local menu = UI.list{ items = { "Play", "Options", "Quit" },
+                      x = 120, y = 90, w = 160, rowH = 18, visible = 3 }
+menu:enter()                         -- rows slide in one after another
+
+function playdate.update()
+    rep:poll()
+    menu:navigate(rep)               -- up/down, wraps, repeats when held
+    if playdate.buttonJustPressed(playdate.kButtonA) then menu:confirm() end
+    menu:draw()
+end
+```
+
+![A song list sliding in row by row, the highlight filling in, a wrap-around bump, a confirm blink, then the SFX grid scrolling](https://raw.githubusercontent.com/jenissimo/playdate-juice/media/ui.gif)
+
+The highlight fills in and springs between rows, the selected row nudges
+over, a wrap bumps the list. Every effect can be tuned or turned off.
+→ [docs/ui.md](docs/ui.md)
 
 ## Demo
 
@@ -249,12 +238,19 @@ this repo does not get a dozen megabytes of GIFs copied into its `.pdx`.
 ## Tests
 
 ```bash
-lua test/run.lua                # expect "N checks, 0 failures"
+lua test/run.lua
 python tools/chiptune.py test   # ROM traces, formats 2/3/4, banks, encoder and shipped songs
 ```
 
+## Made with playdate-juice
+
+- [Crankball](https://happydoggames.itch.io/crankball)
+- [Glidr](https://play.date/games/glidr/)
+
+Shipping a game that uses these modules?
+[Open an issue](https://github.com/jenissimo/playdate-juice/issues/new?title=Showcase%3A%20) with a link and it goes on this list.
+
 ## License
 
-MIT. The transition driver, the sound engine and the paw/blink effects were
-extracted from a shipping game. The chiptune
-driver, its format, drum recipes and wave synth come from gameboy-lab.
+MIT. The chiptune driver, its format, drum recipes and wave synth come from
+gameboy-lab.

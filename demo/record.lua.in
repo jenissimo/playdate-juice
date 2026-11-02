@@ -98,6 +98,18 @@ local function build()
         end
     end
     cut()
+
+    -- visualizer: the music-reactive backgrounds while the hub song plays
+    clip("visualizer")
+    for _, name in ipairs({ "Terrain", "Equalizer", "Radar", "Lightning" }) do
+        local to = Backgrounds.indexOf(name)
+        if to then
+            for _ = 1, (to - bg) % Backgrounds.count do tap(RIGHT, 1) end
+            bg = to
+            wait(42)
+        end
+    end
+    cut()
     tap(B, 30)
 
     -- tween: easings riding their curves, the spring chasing a target
@@ -135,6 +147,24 @@ local function build()
     tap(RIGHT, 8); tap(A, 30)
     tap(A, 20)
     tap(LEFT, 8); tap(A, 40)
+    cut()
+    tap(B, 30)
+
+    -- ui: the menu effects. The song list slides in row by row, the highlight
+    -- fills in on each step, wrapping from the top bumps the list, A blinks
+    -- the row; back on the hub the SFX grid enters, scrolls and fires one.
+    -- Starts on the hub with Chiptune: Music selected (the clip above left it there).
+    clip("ui")
+    tap(A, 34)                                    -- enter: rows stagger in
+    tap(UP, 7); tap(UP, 7); tap(UP, 7)            -- Crimson Clash up to the first song
+    tap(UP, 14)                                   -- wraps to the last: bump
+    tap(A, 16)                                    -- confirm: the row blinks
+    tap(B, 22)
+    hub = walk(HUB, hub, "sfx", 8)
+    tap(A, 34)                                    -- the grid's entrance
+    tap(RIGHT, 6); tap(DOWN, 6)
+    hold(DOWN, 55)                                -- key repeat scrolls the grid
+    tap(A, 22)
     cut()
     tap(B, 30)
 
@@ -212,6 +242,13 @@ end
 
 function Record.install()
     build()
+    -- Log every effect fired while filming, for the trailer's sound track:
+    --   record: sfx <clip> <frame> <name>
+    local sfx = Chiptune.sfx
+    Chiptune.sfx = function(id, ...)
+        if name then print(string.format("record: sfx %s %d %s", name, frame + 1, tostring(id))) end
+        return sfx(id, ...)
+    end
     local update = pd.update
     pd.update = function()
         before()
