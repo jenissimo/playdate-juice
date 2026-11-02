@@ -46,12 +46,13 @@ local SONGS = {
     { id = "steel_circuit", title = "Steel Circuit", style = "Rock - PCM8 band, acid break", tag = "PCM 8ch", bank = "rock" },
     { id = "chrome_breaks", title = "Chrome Breaks", style = "Jungle - chopped drums, reese", tag = "PCM 8ch", bank = "rock" },
     { id = "prism_drive",   title = "Prism Drive",   style = "Trance - supersaw, offbeat bass", tag = "PCM 8ch", bank = "rock" },
-    { id = "studio_menu",  title = "Studio Menu",  style = "Original rock arrangement - 140 BPM", tag = "PCM A/B", bank = "studio", reference = true },
-    { id = "studio_play",  title = "Studio Play",  style = "Original table theme - 132 BPM", tag = "PCM A/B", bank = "studio", reference = true },
-    { id = "studio_multi", title = "Studio Multi", style = "Original multiball theme - 166 BPM", tag = "PCM A/B", bank = "studio", reference = true },
+    { id = "studio_menu",  title = "Studio Menu",  style = "Rock - menu theme, 140 BPM", tag = "PCM 8ch", bank = "studio" },
+    { id = "studio_play",  title = "Studio Play",  style = "Rock - table theme, 132 BPM", tag = "PCM 8ch", bank = "studio" },
+    { id = "studio_multi", title = "Studio Multi", style = "Rock - multiball theme, 166 BPM", tag = "PCM 8ch", bank = "studio" },
     { id = "jungle_ride",   title = "Jungle Ride",   style = "Jungle - chopped break, reese, pads", tag = "FT2 7ch" },
     { id = "jungle_race",   title = "Jungle Race",   style = "Jungle - hard break, hoover, rolls", tag = "FT2 7ch" },
     { id = "jungle_menu",   title = "Jungle Menu",   style = "Jungle - calm, flute, rolling bass", tag = "FT2 6ch" },
+    { id = "iron_spire",    title = "Iron Spire",    style = "NES - singing square, echo, D minor", tag = "NES 4ch" },
 }
 local songPaths = {}
 for _, s in ipairs(SONGS) do
@@ -702,7 +703,12 @@ end
 -- ─── jukebox ───────────────────────────────────────────────────────────────
 
 do
-    local sel, playing = 13, 13
+    local initialSong = "studio_menu"
+    local sel = 1
+    for i, song in ipairs(SONGS) do
+        if song.id == initialSong then sel = i; break end
+    end
+    local playing = sel
     local mode = "live"
     local spring = Tween.newSpring(0, 3)
     local ok = true
@@ -741,7 +747,7 @@ do
         update = function() end,
         draw = function()
             gfx.clear(gfx.kColorWhite)
-            header("Jukebox", mode == "live" and "LIVE TRACKER" or SONGS[playing].reference and "STUDIO REFERENCE" or "ADPCM STREAM")
+            header("Jukebox", mode == "live" and "LIVE TRACKER" or "ADPCM STREAM")
             list(SONGS, sel, 10, 30, 192, 16, 10, spring, function(s) return s.title .. "  " .. s.tag end)
             gfx.setFont(fontBold)
             gfx.drawTextInRect(SONGS[sel].style, 10, 194, 192, 28)
@@ -758,8 +764,7 @@ do
                 gfx.drawText(string.format("order %02d row %02d", order, row), 222, 96)
                 meters(222, 119, 54, nil, nil, 156)
             else
-                gfx.drawTextInRect(SONGS[playing].reference and "The original studio master, for listening A/B." or
-                    "The same arrangement, streamed from a rendered audio loop.", 222, 105, 154, 80)
+                gfx.drawTextInRect("The same arrangement, streamed from a rendered audio loop.", 222, 105, 154, 80)
             end
             footer("up/down track   A play   left/right live/stream   B back")
         end,

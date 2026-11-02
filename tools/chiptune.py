@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """chiptune's host-side tools.
 
-    python tools/chiptune.py songs [--json DIR]    build chiptune/music/*.gbm from tools/chiptune_songs.py
+    python tools/chiptune.py songs                 chiptune/music/src/*.gbm.json -> chiptune/music/*.gbm
     python tools/chiptune.py encode in.gbm.json out.gbm
     python tools/chiptune.py render in.gbm out.wav [renderer options]
     python tools/chiptune.py render-all DIR [--adpcm] [--rate 22050]
     python tools/chiptune.py test                  the C port against the original ROM, and the encoder
-    python tools/chiptune.py studio [--rate HZ]     build the PCM8 bank and rock/jungle/trance demos
     python tools/chiptune.py bank DIR out.gbank [--rate HZ] [--only a,b]
-
-The jungle tracks' samples (chiptune/samples/*.wav) are made by
-tools/jungle_kit.py, which needs numpy; building the songs needs only the
-WAVs.
 
 render, render-all and test compile tools/chiptune_render.c or
 test/chiptune/trace_test.c with whatever C compiler is at hand: cc, gcc or
@@ -35,6 +30,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from gbm_format import encode_song, sfx_names  # noqa: E402
 
 MUSIC = os.path.join(ROOT, 'chiptune', 'music')
+SOURCES = os.path.join(MUSIC, 'src')
 BUILD = os.path.join(ROOT, 'build')
 CORE = ['chiptune/gbapu.c', 'chiptune/vox.c', 'chiptune/gbm.c', 'chiptune/chip.c', 'chiptune/bank_codec.c']
 
@@ -134,21 +130,20 @@ def probe3_song():
 
 # ─── commands ─────────────────────────────────────────────────────────────
 
+def song_sources():
+    """(name, project) for every chiptune/music/src/*.gbm.json."""
+    for f in sorted(os.listdir(SOURCES)):
+        if f.endswith('.gbm.json'):
+            with open(os.path.join(SOURCES, f)) as j:
+                yield f[:-len('.gbm.json')], json.load(j)
+
+
 def cmd_songs(args):
-    import chiptune_songs
-    json_dir = args[args.index('--json') + 1] if '--json' in args else None
-    os.makedirs(MUSIC, exist_ok=True)
-    built = [(name, fn().project()) for name, fn in chiptune_songs.SONGS.items()]
-    built.append(('sfx', chiptune_songs.sfx_library().project()))
-    for name, song in built:
-        blob = encode_song(song, names=name == 'sfx')
+    for name, song in song_sources():
+        blob = encode_song(song, names=bool(song.get('sfx')))
         with open(os.path.join(MUSIC, name + '.gbm'), 'wb') as f:
             f.write(blob)
-        if json_dir:
-            os.makedirs(json_dir, exist_ok=True)
-            with open(os.path.join(json_dir, name + '.gbm.json'), 'w') as f:
-                json.dump(song, f)
-        what = f"{len(song['sfx'])} effects" if name == 'sfx' else f"{len(song['orders'])} orders"
+        what = f"{len(song['sfx'])} effects" if not song.get('orders') else f"{len(song['orders'])} orders"
         print(f'  {name}.gbm: {len(blob)} bytes, {what}')
 
 
@@ -214,7 +209,7 @@ def cmd_test(args):
         ft2_probe = os.path.join(tmp, 'probe3.gbm')
         with open(ft2_probe, 'wb') as f:
             f.write(encode_song(probe3_song()))
-        # PCM8 and a >64 KiB external bank, independent of studio's DSP.
+        # PCM8 and a >64 KiB external bank.
         from gbm_bank import encode_bank
         from gbm_compose import Song, sample_voice
         import struct
@@ -256,22 +251,14 @@ def cmd_test(args):
             f.write(encode_song(probe3_song()))
         exe = compile_c(['test/chiptune/v3_test.c'] + CORE, 'v3_test')
         fails += subprocess.run([exe, probe, os.path.join(MUSIC, 'sfx.gbm')]).returncode != 0
-    # The shipped songs build and every effect has a name.
-    import chiptune_songs
-    for name, fn in chiptune_songs.SONGS.items():
-        blob = encode_song(fn().project())
+    # The shipped songs match their sources.
+    for name, song in song_sources():
+        blob = encode_song(song, names=bool(song.get('sfx')))
         want = os.path.join(MUSIC, name + '.gbm')
         if not os.path.isfile(want) or open(want, 'rb').read() != blob:
             print(f'  chiptune/music/{name}.gbm is stale: run `python tools/chiptune.py songs`')
             fails += 1
-    with tempfile.TemporaryDirectory(prefix='studio-check-') as directory:
-        built = studio_projects(directory, 16384)
-        for name, (song, bank) in built:
-            for filename, payload in ((name + '.gbm', encode_song(song.project())), ('rock.gbank', bank)):
-                path = os.path.join(MUSIC, filename)
-                if not os.path.isfile(path) or open(path, 'rb').read() != payload:
-                    print(f'  chiptune/music/{filename} is stale: run `python tools/chiptune.py studio`')
-                    fails += 1
+    fails += subprocess.run([sys.executable, os.path.join(ROOT, 'test', 'chiptune', 'nes_test.py')]).returncode != 0
     print('chiptune: ' + ('all passed' if not fails else f'{fails} failure(s)'))
     sys.exit(1 if fails else 0)
 
@@ -300,40 +287,8 @@ def sample_bank_path(song, directory):
     raise ValueError('no matching sample bank in ' + directory)
 
 
-def studio_projects(directory, rate):
-    from studio_theme import THEMES, SAMPLES
-    node = shutil.which('node')
-    if not node:
-        sys.exit('node is required to render the studio instruments')
-    subprocess.run([node, os.path.join(ROOT, 'chiptune', 'studio', 'samples.cjs'),
-                    os.path.join(ROOT, 'chiptune', 'studio', 'banks', 'tracker.cjs'), directory,
-                    '--only', ','.join(SAMPLES)], check=True)
-    built = [(name, fn(directory, rate=rate)) for name, fn in THEMES.items()]
-    bank = built[0][1][1]
-    if any(pair[1] != bank for _, pair in built):
-        sys.exit('the studio themes must share one bank')
-    return built
-
-
-def cmd_studio(args):
-    rate = int(args[args.index('--rate') + 1]) if '--rate' in args else 16384
-    directory = os.path.join(BUILD, 'studio-rock')
-    built = studio_projects(directory, rate)
-    bank = built[0][1][1]
-    if len(bank) > 256 * 1024:
-        sys.exit(f'rock bank is {len(bank)} bytes; budget is 256 KiB')
-    os.makedirs(MUSIC, exist_ok=True)
-    for name, data in [(name + '.gbm', encode_song(pair[0].project())) for name, pair in built] + [('rock.gbank', bank)]:
-        with open(os.path.join(MUSIC, name), 'wb') as f:
-            f.write(data)
-        print(f'  {name}: {len(data)} bytes')
-    for name, (song, _) in built:
-        with open(os.path.join(directory, name + '.gbm.json'), 'w') as f:
-            json.dump(song.project(), f, indent=1)
-
-
 COMMANDS = {'songs': cmd_songs, 'encode': cmd_encode, 'render': cmd_render,
-            'render-all': cmd_render_all, 'test': cmd_test, 'bank': cmd_bank, 'studio': cmd_studio}
+            'render-all': cmd_render_all, 'test': cmd_test, 'bank': cmd_bank}
 
 if __name__ == '__main__':
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

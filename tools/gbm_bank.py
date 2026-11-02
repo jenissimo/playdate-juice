@@ -1,4 +1,4 @@
-"""Studio bank.json + PCM WAV -> shared, immutable PCM8 .gbank.
+"""bank.json + PCM WAV -> shared, immutable PCM8 .gbank.
 
 GBK1: 12-byte header (magic, u16 count, u16 reserved, u32 FNV-1a identity),
 then count records of six u32s: data offset, sample count, rate, root mHz,
@@ -64,7 +64,7 @@ def import_bank(directory, rate=16384, only=None):
     if only:
         missing = set(only) - {s['name'] for s in meta}
         if missing:
-            raise ValueError('no studio sample: ' + ', '.join(sorted(missing)))
+            raise ValueError('no such sample: ' + ', '.join(sorted(missing)))
     out, seen = [], set()
     with tempfile.TemporaryDirectory(prefix='gbm-bank-') as tmp:
         for m in meta:

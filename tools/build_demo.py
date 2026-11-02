@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the demo (the Zoo) .pdx.
 
-    python tools/build_demo.py [--lua-only] [--no-device] [--jukebox] [--record DIR]
+    python tools/build_demo.py [--lua-only] [--no-device] [--jukebox] [--song ID] [--record DIR]
 
 The library modules live at the repo ROOT so that a consumer can add this repo
 as a submodule straight inside their Source/ and `import "juice/tween"`. pdc,
@@ -17,8 +17,8 @@ only copied in at demo-build time.
 
 On top of the Lua, the Zoo stages:
   music/     chiptune/music/*.gbm, the songs and the SFX bank;
-  jukebox/   fifteen tracker renders and three original studio masters as ADPCM WAV
-             (needs a host C compiler; skipped without one);
+  jukebox/   every song rendered as ADPCM WAV (needs a host C compiler;
+             skipped without one);
   pdex.*     the chiptune C extension, built with CMake: for the simulator
              with the host compiler, and for the device when arm-none-eabi-gcc
              is on PATH (or ARM_GCC_BIN points at its bin/). --lua-only skips
@@ -46,8 +46,10 @@ MODULES = [
 JUKEBOX_SONGS = ["cloud_garden", "tidal_twang", "jungle_pulse", "crimson_clash", "willow_lane",
                 "hollow_deep", "neon_acid", "victory", "fade_out",
                 "steel_circuit", "chrome_breaks", "prism_drive",
+                "studio_menu", "studio_play", "studio_multi", "iron_spire",
                 "jungle_ride", "jungle_race", "jungle_menu"]
-STUDIO_SONGS = {"studio_menu": "menu", "studio_play": "play", "studio_multi": "multi"}
+BANKS = {"steel_circuit": "rock", "chrome_breaks": "rock", "prism_drive": "rock",
+         "studio_menu": "overturn", "studio_play": "overturn", "studio_multi": "overturn"}
 
 
 def find_sdk():
@@ -119,18 +121,9 @@ def render_jukebox(dst):
         return
     os.makedirs(dst, exist_ok=True)
     for song in JUKEBOX_SONGS:
-        bank_args = ["--bank", os.path.join(ROOT, "chiptune", "music", "rock.gbank")] if song in (
-            "steel_circuit", "chrome_breaks", "prism_drive") else []
+        bank_args = ["--bank", os.path.join(ROOT, "chiptune", "music", BANKS[song] + ".gbank")] if song in BANKS else []
         subprocess.run([exe, os.path.join(ROOT, "chiptune", "music", song + ".gbm"),
                         os.path.join(dst, song + ".wav"), "--loops", "2", "--mono", "--adpcm", "--rate", "22050"] + bank_args,
-                       check=True, stdout=subprocess.DEVNULL)
-    node = shutil.which('node')
-    if not node:
-        sys.exit('node is required for the studio A/B reference tracks')
-    for song, name in STUDIO_SONGS.items():
-        subprocess.run([node, os.path.join(ROOT, 'chiptune', 'studio', 'render.cjs'),
-                        os.path.join(ROOT, 'chiptune', 'studio', 'songs', 'overturn_rock.cjs'),
-                        '--only', name, '--out', dst, '--prefix', 'studio_', '--adpcm'],
                        check=True, stdout=subprocess.DEVNULL)
 
 
@@ -138,6 +131,10 @@ def main():
     lua_only = "--lua-only" in sys.argv
     device = "--no-device" not in sys.argv
     jukebox = "--jukebox" in sys.argv
+    initial_song = sys.argv[sys.argv.index("--song") + 1] if "--song" in sys.argv else None
+    if initial_song and initial_song not in JUKEBOX_SONGS:
+        sys.exit("unknown demo song: " + initial_song)
+    jukebox = jukebox or bool(initial_song)
     record = sys.argv[sys.argv.index("--record") + 1] if "--record" in sys.argv else None
     if record:
         device = False
@@ -166,6 +163,8 @@ def main():
                     text = source.read()
                 if jukebox and f == 'main.lua.in':
                     text = text.replace('local current = "hub"', 'local current = "jukebox"')
+                if initial_song and f == 'main.lua.in':
+                    text = text.replace('local initialSong = "studio_menu"', 'local initialSong = "' + initial_song + '"')
                 if record and f == 'main.lua.in':
                     # first, so the fake input is in place before main caches it
                     text = 'import "record"\n' + text + '\nRecord.install()\n'

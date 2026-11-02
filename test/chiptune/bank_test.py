@@ -2,7 +2,6 @@
 import json
 import os
 import struct
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,13 +14,16 @@ from gbm_format import encode_song
 
 
 class BankTests(unittest.TestCase):
-    def test_studio_resampled_metadata(self):
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    def test_resampled_loop_end(self):
+        # An odd resampled length once disagreed with the WAV by a frame.
         with tempfile.TemporaryDirectory() as directory:
-            subprocess.run(['node', os.path.join(root, 'chiptune', 'studio', 'samples.cjs'),
-                            os.path.join(root, 'chiptune', 'studio', 'banks', 'rock.cjs'), directory,
-                            '--only', 'pad', '--rate', '16384'], check=True, stdout=subprocess.DEVNULL)
-            # An odd resampled length formerly disagreed with the WAV by a frame.
+            data = [(i * 37) % 2000 - 1000 for i in range(3001)]
+            with wave.open(os.path.join(directory, 'pad.wav'), 'wb') as w:
+                w.setparams((1, 2, 22050, len(data), 'NONE', 'not compressed'))
+                w.writeframes(struct.pack('<' + 'h' * len(data), *data))
+            with open(os.path.join(directory, 'bank.json'), 'w') as f:
+                json.dump([dict(name='pad', file='pad.wav', rate=22050, length=len(data),
+                                root=57, loop=[1000, len(data)])], f)
             samples = import_bank(directory, rate=16384)
             self.assertEqual(samples[0]['loop'][1], len(samples[0]['pcm8']))
 
@@ -49,7 +51,7 @@ class BankTests(unittest.TestCase):
             song = encode_song(s.project())
             self.assertEqual(song[2], 4)
             self.assertEqual(song[28:32], blob[8:12])
-            with self.assertRaisesRegex(ValueError, 'no studio sample'):
+            with self.assertRaisesRegex(ValueError, 'no such sample'):
                 import_bank(directory, only=['missing'])
             meta[0]['loop'] = [2000, 1000]
             with open(path, 'w') as f:
