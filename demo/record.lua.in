@@ -161,10 +161,16 @@ local function build()
     tap(A, 16)                                    -- confirm: the row blinks
     tap(B, 22)
     hub = walk(HUB, hub, "sfx", 8)
-    tap(A, 34)                                    -- the grid's entrance
-    tap(RIGHT, 6); tap(DOWN, 6)
-    hold(DOWN, 55)                                -- key repeat scrolls the grid
-    tap(A, 22)
+    tap(A, 30)                                    -- the grid's entrance
+    -- walk the grid and fire as we go (3 columns, row-major from cursor)
+    tap(DOWN, 4); tap(DOWN, 4); tap(RIGHT, 4); tap(RIGHT, 4); tap(A, 14)   -- jump
+    tap(DOWN, 4); tap(DOWN, 4); tap(DOWN, 4); tap(A, 14)                   -- laser
+    tap(DOWN, 4); tap(LEFT, 4); tap(A, 16)                                 -- explosion
+    tap(DOWN, 4); tap(DOWN, 4); tap(A, 12)                                 -- pickup
+    tap(RIGHT, 4); tap(A, 14)                                              -- powerup
+    tap(DOWN, 4); tap(DOWN, 4); tap(A, 14)                                 -- win
+    hold(DOWN, 30)                                -- key repeat scrolls the grid
+    tap(A, 22)                                    -- a transition whoosh
     cut()
     tap(B, 30)
 
