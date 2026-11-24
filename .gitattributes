@@ -1,0 +1,10 @@
+# A game that embeds this repo as a submodule under its Source tree builds its
+# UI asset catalog from these files' BYTES: HappyEditor fingerprints every .fnt it
+# finds, and every generated layout carries the resulting stamp. A Windows
+# checkout with core.autocrlf turns the .fnt files CRLF, so a generate there
+# re-stamps every layout. The game's own .gitattributes does not reach into a
+# submodule, so the rule has to live here. Keep them LF.
+# The blank line in each bundled font changes its Git blob so an existing
+# submodule checkout rewrites the file on update. Byte-based catalogs may need
+# to be regenerated once.
+*.fnt text eol=lf
